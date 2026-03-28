@@ -1,0 +1,32 @@
+# Single container: repo mounted at /trading-bot (same name as the project folder).
+#
+# Start (detached, keeps running):
+#   docker compose up -d --build
+#
+# Shell inside the container (build, run, edit workflow on host):
+#   docker compose exec -it trading-bot bash
+#
+# Then e.g.:
+#   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPORTABLE_RELEASE=ON
+#   cmake --build build -j"$(nproc)"
+#   ./build/trading_bot
+#
+# Stop:
+#   docker compose down
+
+services:
+  trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: trading-bot
+    volumes:
+      - .:/trading-bot
+    working_dir: /trading-bot
+    stdin_open: true
+    tty: true
+    restart: "no"
+    environment:
+      - TZ=UTC
+    command: sleep infinity
