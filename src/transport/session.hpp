@@ -15,7 +15,21 @@ public:
     explicit Session(ClientDerived& client, SessionID sessionID)
         : client_(client), ctx_{.id = sessionID} {}
 
-    void forward_message(std::string_view m) { derivedSession().onMessage(m); }
+    bool isHeartbeat(std::string_view msg) {
+        if(msg.size() > 64 + simdjson::SIMDJSON_PADDING) return false;
+        return msg.find(R"("heartbeat")") != std::string_view::npos;
+    }
+
+    void forward_message(std::string_view m) { 
+        if(isHeartbeat(m)) {
+            std::cout<<"Got heartbeat"<<" "<<m.size()<<"\n\n\n";
+            std::cout << m << "\n\n\n";
+            arm_timer_ms(ClientDerived::HEARTBEAT_TIMEOUT_MS);
+            return;
+        }
+
+        derivedSession().onMessage(m); 
+    }
 
     WSParser parser_;
 
@@ -95,7 +109,6 @@ public:
         if(ctx_.ssl_) { SSL_shutdown(ctx_.ssl_); SSL_free(ctx_.ssl_); ctx_.ssl_ = nullptr;}
         if(ctx_.fd_ >= 0) { close(ctx_.fd_); ctx_.fd_ = -1;}
     }
-
 
     int arm_timer_ms(int delay_ms) {
         itimerspec ts{};

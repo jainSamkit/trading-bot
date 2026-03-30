@@ -67,7 +67,6 @@ add_compile_options(
 # ── Sources (match tree under src/) ────────────────────────────────────────────
 add_executable(trading_bot
     src/main.cpp
-    src/parser/delta_parser.cpp
 )
 
 target_link_libraries(trading_bot PRIVATE
@@ -108,6 +107,7 @@ if(BUILD_TESTS)
     add_executable(trading_bot_tests
         tests/test_ws_parser.cpp
         tests/test_session.cpp
+        tests/test_l2_parsing.cpp
     )
     target_include_directories(trading_bot_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/tests

@@ -1,13 +1,13 @@
 #pragma once
 #include "transport/wsclient.hpp"
+#include "delta_exchange/models/product.hpp"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>
 #include <string>
 
-// MockClient: controllable transport for unit-testing Session logic.
-// Override the _impl hooks so Session::init() succeeds/fails without network.
 struct MockClient : WebSocketClient<MockClient> {
+    static constexpr uint64_t HEARTBEAT_TIMEOUT_MS = 35000;
     bool tcp_succeed = true;
     bool tls_succeed = true;
     bool ws_succeed  = true;
@@ -16,6 +16,8 @@ struct MockClient : WebSocketClient<MockClient> {
     int  session_adds      = 0;
     int  session_deletes   = 0;
     bool shutdown_         = false;
+
+    ProductTable products_;
 
     std::optional<int> tcp_connect_impl() {
         ++connect_attempts;
@@ -49,7 +51,6 @@ struct MockClient : WebSocketClient<MockClient> {
     void shutdownReactor()  { shutdown_ = true; }
 };
 
-// MockSession: records callbacks so tests can assert on messages/subscribe/auth.
 struct MockSession : Session<MockSession, MockClient> {
     std::vector<std::string> messages;
     int subscribe_count = 0;

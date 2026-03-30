@@ -3,34 +3,33 @@
 #include <cassert>
 #include <cstdint>
 #include <vector>
-#include "feed/feed_types.hpp"
+#include "feed/sessions/types.hpp"
 
 // ── OrderBook<Depth> ──────────────────────────────────────────────────────────
 // Dense book in integer tick space + integer lot counts. No floating point on
 // the hot path; tick_width / lower_bound / lot_size are only for API doubles.
 
-template <uint8_t Depth>
+template<uint8_t Depth>
 class OrderBook {
 public:
     struct TOBEntry {
-        uint32_t tick     = 0;   // meaningless if qty_lots == 0
-        uint64_t qty_lots = 0;   // 0 → empty ladder slot
+        uint32_t tick     = 0;   // meaningless if size == 0
+        uint64_t size = 0;   // 0 → empty ladder slot
     };
 
-    /// lot_size: multiply qty_lots for display (e.g. 0.001 if lots are milli-BTC).
-    explicit OrderBook(uint16_t const& symbol,
-                       double             lower_bound_price,
-                       double             upper_bound_price,
-                       double             tick_width,
-                       double             lot_size = 1.0);
+    OrderBook() = default;
 
     OrderBook(OrderBook const&)            = delete;
     OrderBook& operator=(OrderBook const&) = delete;
     OrderBook(OrderBook&&)                 = delete;
     OrderBook& operator=(OrderBook&&)      = delete;
 
-    void onSnapshot(FeedMessage const& msg);
-    void onUpdate(FeedMessage const& msg);
+    void init(uint8_t product_id, double lower_bound_price,
+              double upper_bound_price, double tick_width);
+
+    void onSnapshot(L2Update const& msg);
+    void onUpdate(L2Update const& msg);
+    void update(L2Update const& msg);
 
     // ── Display (double) — computed from tick + lots; never stored in the book ─
 
@@ -41,11 +40,6 @@ public:
 
     /// Convert book tick index → price (same grid as constructor).
     double priceFromTick(uint32_t tick) const;
-
-    /// Display quantity: lots × lot_size (constructor).
-    double qtyFromLots(uint64_t qty_lots) const;
-
-    uint16_t const& symbol() const { return symbol_; }
 
     TOBEntry const& bid(uint8_t n) const
     {
@@ -59,21 +53,20 @@ public:
     }
 
 private:
-    void applyBidTick(uint32_t tick, uint64_t qty_lots);
-    void applyAskTick(uint32_t tick, uint64_t qty_lots);
+    void applyBidTick(uint32_t tick, uint64_t size);
+    void applyAskTick(uint32_t tick, uint64_t size);
 
     void refillBidLadder();
     void refillAskLadder();
 
     bool inRangeTick(uint32_t tick) const { return tick < num_levels_; }
 
-    uint16_t symbol_;
+    uint8_t product_id_ = 0;
 
     uint32_t num_levels_;
     double   lower_bound_;
     double   upper_bound_;
     double   tick_width_;
-    double   lot_size_;
 
     int32_t best_bid_tick_;
     int32_t best_ask_tick_;

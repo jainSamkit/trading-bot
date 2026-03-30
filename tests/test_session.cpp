@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "mock_client.hpp"
-#include "delta_exchange/client.hpp"
 #include <sys/timerfd.h>
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -47,7 +46,7 @@ TEST(SessionInit, FailsAtTLS) {
 
     EXPECT_FALSE(session.init());
     EXPECT_NE(session.status(), SessionStatus::CONNECTED);
-    EXPECT_LT(session.get_fd(), 0);   // cleanup happened
+    EXPECT_LT(session.get_fd(), 0);
 }
 
 TEST(SessionInit, FailsAtWSUpgrade) {
@@ -57,7 +56,7 @@ TEST(SessionInit, FailsAtWSUpgrade) {
 
     EXPECT_FALSE(session.init());
     EXPECT_NE(session.status(), SessionStatus::CONNECTED);
-    EXPECT_LT(session.get_fd(), 0);   // cleanup happened
+    EXPECT_LT(session.get_fd(), 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -169,8 +168,6 @@ TEST(Reconnect, ExponentialBackoffDelays) {
 
     client.tcp_succeed = false;
 
-    // expected delay: base_wait + (1 << i) * 1000
-    // i=0 → 2000,  i=1 → 3000,  i=2 → 5000,  i=3 → 9000
     for (int i = 0; i < 4; ++i) {
         session.reconnect();
         EXPECT_EQ(session.reconnect_count(), static_cast<uint8_t>(i + 1))
@@ -192,14 +189,11 @@ TEST(Reconnect, MaxReconnectsExceeded_Destroys) {
 
     client.tcp_succeed = false;
 
-    // 1st call from CONNECTED → disconnect → RECONNECTING → fail → arm, reconnects=1
     session.reconnect();
-    // 9 more from RECONNECTING → fail → arm
     for (int i = 1; i < 10; ++i)
         session.reconnect();
     EXPECT_EQ(session.reconnect_count(), 10u);
 
-    // 11th call: reconnects >= MAX_RECONNECTS → destroy()
     session.reconnect();
     EXPECT_EQ(session.status(), SessionStatus::DISCONNECTED);
     EXPECT_LT(session.get_fd(), 0);
@@ -248,6 +242,16 @@ TEST(SessionCallbacks, ForwardMessage) {
     EXPECT_EQ(session.messages[1], "trade");
 }
 
+TEST(SessionCallbacks, HeartbeatIsFiltered) {
+    MockClient client;
+    MockSession session(client, SessionID::L2Update);
+    ASSERT_TRUE(session.init(true));
+
+    session.forward_message(R"({"type":"heartbeat"})");
+
+    EXPECT_EQ(session.messages.size(), 0u);
+}
+
 TEST(SessionCallbacks, Subscribe) {
     MockClient client;
     MockSession session(client, SessionID::L2Update);
@@ -269,30 +273,6 @@ TEST(SessionCallbacks, Auth) {
 TEST(Shutdown, MockClientShutdownFlag) {
     MockClient client;
     EXPECT_FALSE(client.isShutdown());
-    client.shutdownReactor();
-    EXPECT_TRUE(client.isShutdown());
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  DeltaWebsocketClient construction / destruction
-// ═══════════════════════════════════════════════════════════════════════════════
-
-TEST(DeltaClient, ConstructsAndDestroys) {
-    EXPECT_NO_THROW({
-        DeltaWebsocketClient client("localhost", 443, "/");
-    });
-}
-
-TEST(DeltaClient, SetL2Subscription) {
-    DeltaWebsocketClient client("localhost", 443, "/");
-    EXPECT_NO_THROW(client.setL2Subscription("l2_orderbook", "BTCUSD"));
-}
-
-TEST(DeltaClient, ShutdownIdempotent) {
-    DeltaWebsocketClient client("localhost", 443, "/");
-    EXPECT_FALSE(client.isShutdown());
-    client.shutdownReactor();
-    EXPECT_TRUE(client.isShutdown());
     client.shutdownReactor();
     EXPECT_TRUE(client.isShutdown());
 }

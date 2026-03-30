@@ -19,8 +19,16 @@
 #include <openssl/err.h>
 #include <openssl/sha.h>
 #include <sys/timerfd.h>
+#include <time.h>
 #include <cstdint>
 #include "transport/types.hpp"
+#include "simdjson.h"
+
+static inline int64_t now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec * 1'000'000'000LL + ts.tv_nsec;
+}
 
 #ifndef be64toh
 #if defined(__APPLE__)
@@ -149,6 +157,9 @@ struct WSParser {
     uint8_t     fragment_opcode_ = 0;
     bool        in_fragment_     = false;
 
+    int64_t t_kernel = 0;   // set by socketfd() via ioctl(SIOCGSTAMPNS) after SSL_read
+    int64_t t_frame  = 0;   // set by dispatch() when frame is fully assembled
+
     template<typename Callback>
     void feed(const uint8_t* data, size_t len, Callback&& on_frame)
     {
@@ -225,11 +236,14 @@ struct WSParser {
                 i        += take;
 
                 if (pfilled_ == payload_len_) {
+
                     // unmask if needed
                     if (masked_) {
                         for (uint64_t j = 0; j < payload_len_; j++)
                             payload_[j] ^= mask_key_[j % 4];
                     }
+
+                    payload_.resize(payload_len_ + simdjson::SIMDJSON_PADDING, 0);
 
                     dispatch(on_frame);
                     state_   = State::Header;
@@ -241,6 +255,7 @@ struct WSParser {
 
     template<typename Callback>
     void dispatch(Callback&& on_frame) {
+        t_frame = now_ns();
         std::string_view payload((char*)payload_.data(), payload_len_);
 
         // control frames — never fragmented, deliver immediately
@@ -345,8 +360,8 @@ struct WebSocketClient {
             }
 
             int opt = 1;
-            setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-            setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
+            setsockopt(sockfd, SOL_SOCKET,  SO_REUSEADDR, &opt, sizeof(opt));
+            setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY,  &opt, sizeof(opt));
 
             if (::connect(sockfd, rp->ai_addr, static_cast<socklen_t>(rp->ai_addrlen)) == 0)
                 break;
@@ -505,6 +520,11 @@ struct WebSocketClient {
         for (;;) {
             int r = SSL_read(ssl, buf, BUFSIZE);
             if (r > 0) {
+                // stamped immediately after SSL_read: post TCP-recv + TLS decrypt,
+                // before frame assembly. True kernel/NIC timestamps require recvmsg
+                // ancillary data below the SSL layer (kernel bypass or AF_XDP).
+                session.parser_.t_kernel = now_ns();
+
                 session.parser_.feed(buf, static_cast<size_t>(r),
                     [&](uint8_t opcode, std::string_view msg) {
                         switch (opcode) {

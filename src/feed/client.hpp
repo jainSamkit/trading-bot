@@ -9,6 +9,9 @@
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include "simdjson.h"
+#include "feed/models/product.hpp"
+#include "feed/sessions/types.hpp"
+#include "core/spsc_ring.hpp"
 
 class L2UpdateSession;
 class TickerSession;
@@ -16,31 +19,15 @@ class MarkSession;
 
 class DeltaWebsocketClient : public WebSocketClient<DeltaWebsocketClient> {
 public:
-    DeltaWebsocketClient(const char* host, int port, const char* path = "/");
+    DeltaWebsocketClient(const char* host, int port, const char* path,
+                         const ProductTable& products, SpscRing<FeedMessage,4096>* ring);
 
     ~DeltaWebsocketClient();
 
     static constexpr uint64_t HEARTBEAT_TIMEOUT_MS = 35000;
 
-    /** Default: Delta testnet public L2 book (override before start()). */
-    void setL2Subscription(std::string channel, std::string symbol) {
-        l2_channel_ = std::move(channel);
-        l2_symbol_  = std::move(symbol);
-    }
-
     void enable_heartbeat(SSL* ssl) {
         ws_send(ssl, R"({"type":"enable_heartbeat"})");
-    }
-
-    void subscribe(SSL* ssl, const std::string& channel,
-                   const std::string& symbol) {
-        std::string msg =
-            R"({"type":"subscribe","payload":{"channels":[{"name":")"
-            + channel
-            + R"(","symbols":[")"
-            + symbol
-            + R"("]}]}})";
-        ws_send(ssl, msg);
     }
 
     void start();
@@ -97,7 +84,6 @@ public:
     }
 
     void onsessionDelete(SessionCtx& ctx) {
-        // sessionHash.erase(ctx.id);
         if (ctx.fd_ >= 0)
             epoll_delete(ctx.fd_);
         if (ctx.tfd_ >= 0)
@@ -113,33 +99,40 @@ public:
         return true;
     }
 
+    void commit_to_ring() {
+        ring_-> push_commit();
+    }
+
+    FeedMessage* get_ring_slot() {
+        return ring_ -> push_begin();
+    }
+
     bool isShutdown() {
         return shutdown_;
     }
 
-    /** Called from I/O thread after draining shutdown eventfd — closes sessions and epoll. */
     void shutdownReactor();
+
+    simdjson::ondemand::parser& get_parser() { return feed_parser_; }
+
+    const ProductTable products_;
 
 protected:
     simdjson::ondemand::parser feed_parser_;
-    
-private:
-    std::unique_ptr<L2UpdateSession>   l2UpdateSession_;
-    std::unique_ptr<TickerSession>    tickerSession_;
-    std::unique_ptr<MarkSession>     markSession_;
 
-    std::string l2_channel_{"l2_orderbook"};
-    std::string l2_symbol_{"BTCUSD_TestNet"};
+private:
+    std::unique_ptr<L2UpdateSession> l2UpdateSession_;
+    std::unique_ptr<TickerSession>   tickerSession_;
+    std::unique_ptr<MarkSession>     markSession_;
+    SpscRing<FeedMessage, 4096>* ring_;
 
     bool shutdown_ = false;
     EpollSlot eventFDSlot;
 };
 
-// Session classes need DeltaWebsocketClient complete (above) and are needed
-// complete by the out-of-line methods (below). This is the only valid spot.
-#include "delta_exchange/sessions/l2.hpp"
-#include "delta_exchange/sessions/mark.hpp"
-#include "delta_exchange/sessions/ticker.hpp"
+#include "feed/sessions/l2.hpp"
+#include "feed/sessions/mark.hpp"
+#include "feed/sessions/ticker.hpp"
 
 inline DeltaWebsocketClient::~DeltaWebsocketClient() {
     if (!shutdown_)
@@ -151,14 +144,6 @@ inline void DeltaWebsocketClient::start() {
         return;
     l2UpdateSession_->subscribe();
 
-    // if (SSL* ssl = l2UpdateSession_->get_ssl()) {
-    //     if (!l2_channel_.empty() && !l2_symbol_.empty())
-    //         subscribe(ssl, l2_channel_, l2_symbol_);
-    //     enable_heartbeat(ssl);
-    //     std::cout<<"Heartbeat enabled"<<"\n\n";
-    //     l2UpdateSession_->arm_timer_ms(DeltaWebsocketClient::HEARTBEAT_TIMEOUT_MS);
-    //     std::cout<<"Timer armed"<<"\n\n";
-    // }
     run_loop(static_cast<DeltaWebsocketClient*>(this));
 }
 
@@ -182,11 +167,15 @@ inline void DeltaWebsocketClient::shutdownReactor() {
     }
 }
 
-inline DeltaWebsocketClient::DeltaWebsocketClient(const char* host, int port, const char* path)
-    : l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
+inline DeltaWebsocketClient::DeltaWebsocketClient(
+    const char* host, int port, const char* path,
+    const ProductTable& products, SpscRing<FeedMessage, 4096>* ring)
+    : products_(products)
+    , l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
     , tickerSession_(std::make_unique<TickerSession>(*this, SessionID::Ticker))
-    , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark)) {
-
+    , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark))
+    , ring_(ring)
+{
     WebSocketClient::host = host ? host : "";
     WebSocketClient::port = port;
     WebSocketClient::path = (path && path[0]) ? path : "/";

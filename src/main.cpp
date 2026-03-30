@@ -1,59 +1,70 @@
-#include "delta_exchange/client.hpp"
-
+#include "feed/client.hpp"
+#include "market_state/market_state.hpp"
+#include <atomic>
 #include <cstdlib>
 #include <csignal>
 #include <iostream>
 #include <string>
+#include <thread>
 
-// Delta Exchange WebSocket — see https://docs.delta.exchange/#subscribing-to-channels
-//
-// URLs in the docs are wss:// (TLS). The port is not spelled out because wss uses the
-// same default as HTTPS: 443. Pass that explicitly here (our client uses host + port, not a full URL).
-//
-// Official endpoints (from docs):
-//   Production (India): wss://socket.india.delta.exchange
-//   Testnet (demo):     wss://socket-ind.testnet.deltaex.org
-//
-// Usage:
-//   ./trading_bot [host] [port] [path] [channel] [symbol]
-// Example (testnet L2):
-//   ./trading_bot socket-ind.testnet.deltaex.org 443 / l2_orderbook BTCUSD
-
-static DeltaWebsocketClient* g_client = nullptr;
+static DeltaWebsocketClient* g_client  = nullptr;
+static std::atomic<bool>     g_running{true};
 
 static void on_signal(int)
 {
+    g_running.store(false, std::memory_order_relaxed);
     if (g_client)
         g_client->shutdown();
 }
 
 int main(int argc, char** argv)
 {
-    // Hostname only — no "wss://" (that is implied by TLS + port 443 in our stack).
-    std::string host    = "socket.india.delta.exchange";
-    int         port    = 443;
-    std::string path    = "/";
-    std::string channel = "l2_updates";
-    std::string symbol  = "ADAUSD";
+    ProductTable products;
+    products.add({
+        .exchange_id       = 27,
+        .symbol            = "BTCUSD",
+        .tick_size         = 0.5,
+        .contract_value    = 1.0,
+        .lower_bound_price = 0.0,
+        .upper_bound_price = 200000.0,
+    });
+    // products.add({
+    //     .exchange_id       = 139,
+    //     .symbol            = "SOLUSD",
+    //     .tick_size         = 0.01,
+    //     .contract_value    = 1.0,
+    //     .lower_bound_price = 0.0,
+    //     .upper_bound_price = 1000.0,
+    // });
+
+    SpscRing<FeedMessage, 4096> feedRing;
+    MarketState marketState(feedRing, products);
+
+    std::string host = "socket.india.delta.exchange";
+    int         port = 443;
+    std::string path = "/";
 
     if (argc >= 2) host = argv[1];
     if (argc >= 3) port = std::atoi(argv[2]);
     if (argc >= 4) path = argv[3];
-    if (argc >= 5) channel = argv[4];
-    if (argc >= 6) symbol = argv[5];
 
-    std::signal(SIGINT, on_signal);
+    std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
-    DeltaWebsocketClient client(host.c_str(), port, path.c_str());
+    // market state spins on its own thread
+    std::thread market_thread([&]() {
+        marketState.run(g_running);
+    });
+
+    DeltaWebsocketClient client(host.c_str(), port, path.c_str(), products, &feedRing);
     g_client = &client;
 
-    client.setL2Subscription(channel, symbol);
+    std::cerr << "[delta] " << host << ":" << port << path << "\n";
 
-    std::cerr << "[delta] " << host << ":" << port << path
-              << "  subscribe " << channel << " " << symbol << "\n";
+    client.start();   // blocks until shutdown signal
 
-    client.start();
+    g_running.store(false, std::memory_order_relaxed);
+    market_thread.join();
 
     std::cerr << "[delta] exit\n";
     return 0;

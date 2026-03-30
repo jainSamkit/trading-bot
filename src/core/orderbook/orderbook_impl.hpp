@@ -4,33 +4,33 @@
 
 #include "orderbook.hpp"
 
-// ── Construction ─────────────────────────────────────────────────────────────
+// ── Deferred initialisation ──────────────────────────────────────────────────
 
 template <uint8_t Depth>
-OrderBook<Depth>::OrderBook(uint16_t const& symbol,
-                            double             lower_bound_price,
-                            double             upper_bound_price,
-                            double             tick_width,
-                            double             lot_size)
-    : symbol_(symbol)
-    , num_levels_(static_cast<uint32_t>(
-          std::llround((upper_bound_price - lower_bound_price) / tick_width) + 1))
-    , lower_bound_(lower_bound_price)
-    , upper_bound_(upper_bound_price)
-    , tick_width_(tick_width)
-    , lot_size_(lot_size)
-    , best_bid_tick_(-1)
-    , best_ask_tick_(-1)
-    , bid_qty_(num_levels_, 0)
-    , ask_qty_(num_levels_, 0)
-    , bid_ladder_tail_tick_(-1)
-    , ask_ladder_tail_tick_(-1)
-    , bid_ladder_filled_(0)
-    , ask_ladder_filled_(0)
+void OrderBook<Depth>::init(uint8_t const product_id,
+                            double        lower_bound_price,
+                            double        upper_bound_price,
+                            double        tick_width)
 {
     assert(upper_bound_price > lower_bound_price && "need upper > lower");
     assert(tick_width > 0.0 && "tick_width must be positive");
-    assert(lot_size > 0.0 && "lot_size must be positive");
+
+    product_id_           = product_id;
+    lower_bound_          = lower_bound_price;
+    upper_bound_          = upper_bound_price;
+    tick_width_           = tick_width;
+    num_levels_           = static_cast<uint32_t>(
+        std::llround((upper_bound_price - lower_bound_price) / tick_width) + 1);
+    best_bid_tick_        = -1;
+    best_ask_tick_        = -1;
+    bid_ladder_tail_tick_ = -1;
+    ask_ladder_tail_tick_ = -1;
+    bid_ladder_filled_    = 0;
+    ask_ladder_filled_    = 0;
+
+    bid_qty_.assign(num_levels_, 0);
+    ask_qty_.assign(num_levels_, 0);
+
     assert(num_levels_ >= 2);
 }
 
@@ -41,22 +41,16 @@ double OrderBook<Depth>::priceFromTick(uint32_t tick) const
     return lower_bound_ + static_cast<double>(tick) * tick_width_;
 }
 
-template <uint8_t Depth>
-double OrderBook<Depth>::qtyFromLots(uint64_t qty_lots) const
-{
-    return static_cast<double>(qty_lots) * lot_size_;
-}
-
 // ── Incremental side updates ─────────────────────────────────────────────────
 // Only rescan when the deleted level was the current best.
 
 template <uint8_t Depth>
-void OrderBook<Depth>::applyBidTick(uint32_t tick, uint64_t qty_lots)
+void OrderBook<Depth>::applyBidTick(uint32_t tick, uint64_t size)
 {
     assert(inRangeTick(tick));
-    bid_qty_[tick] = qty_lots;
+    bid_qty_[tick] = size;
 
-    if (qty_lots == 0) {
+    if (size == 0) {
         if (best_bid_tick_ == static_cast<int32_t>(tick)) {
             int32_t i = static_cast<int32_t>(tick) - 1;
             while (i >= 0 && bid_qty_[static_cast<uint32_t>(i)] == 0)
@@ -70,12 +64,12 @@ void OrderBook<Depth>::applyBidTick(uint32_t tick, uint64_t qty_lots)
 }
 
 template <uint8_t Depth>
-void OrderBook<Depth>::applyAskTick(uint32_t tick, uint64_t qty_lots)
+void OrderBook<Depth>::applyAskTick(uint32_t tick, uint64_t size)
 {
     assert(inRangeTick(tick));
-    ask_qty_[tick] = qty_lots;
+    ask_qty_[tick] = size;
 
-    if (qty_lots == 0) {
+    if (size == 0) {
         if (best_ask_tick_ == static_cast<int32_t>(tick)) {
             int32_t i = static_cast<int32_t>(tick) + 1;
             while (static_cast<uint32_t>(i) < num_levels_ && ask_qty_[static_cast<uint32_t>(i)] == 0)
@@ -104,7 +98,7 @@ void OrderBook<Depth>::refillBidLadder()
         uint64_t const q  = bid_qty_[ui];
         if (q != 0) {
             bid_[n].tick     = ui;
-            bid_[n].qty_lots = q;
+            bid_[n].size = q;
             tail_tick = static_cast<int32_t>(ui);
             ++n;
         }
@@ -113,7 +107,7 @@ void OrderBook<Depth>::refillBidLadder()
     uint8_t const filled = n;
     for (; n < Depth; ++n) {
         bid_[n].tick     = 0;
-        bid_[n].qty_lots = 0;
+        bid_[n].size = 0;
     }
 
     bid_ladder_filled_    = filled;
@@ -133,7 +127,7 @@ void OrderBook<Depth>::refillAskLadder()
         uint64_t const q  = ask_qty_[ui];
         if (q != 0) {
             ask_[n].tick     = ui;
-            ask_[n].qty_lots = q;
+            ask_[n].size = q;
             tail_tick = static_cast<int32_t>(ui);
             ++n;
         }
@@ -142,7 +136,7 @@ void OrderBook<Depth>::refillAskLadder()
     uint8_t const filled = n;
     for (; n < Depth; ++n) {
         ask_[n].tick     = 0;
-        ask_[n].qty_lots = 0;
+        ask_[n].size = 0;
     }
 
     ask_ladder_filled_    = filled;
@@ -152,9 +146,9 @@ void OrderBook<Depth>::refillAskLadder()
 // ── Snapshot / update ───────────────────────────────────────────────────────
 
 template <uint8_t Depth>
-void OrderBook<Depth>::onSnapshot(FeedMessage const& msg)
+void OrderBook<Depth>::onSnapshot(L2Update const& msg)
 {
-    assert(msg.action == Action::Snapshot);
+    assert(msg.isSnapshot == true);
 
     std::fill(bid_qty_.begin(), bid_qty_.end(), 0);
     std::fill(ask_qty_.begin(), ask_qty_.end(), 0);
@@ -166,10 +160,10 @@ void OrderBook<Depth>::onSnapshot(FeedMessage const& msg)
     ask_ladder_filled_    = 0;
 
     for (uint8_t i = 0; i < msg.bid_count; ++i) {
-        uint32_t const tick = msg.bids[i].tick;
+        uint32_t const tick = static_cast<uint32_t>(msg.bids[i].price);
         if (!inRangeTick(tick))
             continue;
-        uint64_t const q = msg.bids[i].qty_lots;
+        uint64_t const q = static_cast<uint64_t>(msg.bids[i].size);
         if (q == 0)
             continue;
         bid_qty_[tick] = q;
@@ -178,10 +172,10 @@ void OrderBook<Depth>::onSnapshot(FeedMessage const& msg)
     }
 
     for (uint8_t i = 0; i < msg.ask_count; ++i) {
-        uint32_t const tick = msg.asks[i].tick;
+        uint32_t const tick = static_cast<uint32_t>(msg.asks[i].price);
         if (!inRangeTick(tick))
             continue;
-        uint64_t const q = msg.asks[i].qty_lots;
+        uint64_t const q = static_cast<uint64_t>(msg.asks[i].size);
         if (q == 0)
             continue;
         ask_qty_[tick] = q;
@@ -194,21 +188,21 @@ void OrderBook<Depth>::onSnapshot(FeedMessage const& msg)
 }
 
 template <uint8_t Depth>
-void OrderBook<Depth>::onUpdate(FeedMessage const& msg)
+void OrderBook<Depth>::onUpdate(L2Update const& msg)
 {
-    assert(msg.action == Action::Update);
+    assert(msg.isSnapshot == false);
 
     bool refill_bid = false;
     bool refill_ask = false;
 
     for (uint8_t i = 0; i < msg.bid_count; ++i) {
-        uint32_t const tick = msg.bids[i].tick;
+        uint32_t const tick = static_cast<uint32_t>(msg.bids[i].price);
         if (!inRangeTick(tick))
             continue;
 
         int32_t const ti          = static_cast<int32_t>(tick);
         int32_t const best_before = best_bid_tick_;
-        applyBidTick(tick, msg.bids[i].qty_lots);
+        applyBidTick(tick, static_cast<uint64_t>(msg.bids[i].size));
         bool const best_changed = (best_bid_tick_ != best_before);
         bool const may_affect_ladder =
             (bid_ladder_tail_tick_ < 0) || (bid_ladder_filled_ < Depth) ||
@@ -217,13 +211,13 @@ void OrderBook<Depth>::onUpdate(FeedMessage const& msg)
     }
 
     for (uint8_t i = 0; i < msg.ask_count; ++i) {
-        uint32_t const tick = msg.asks[i].tick;
+        uint32_t const tick = static_cast<uint32_t>(msg.asks[i].price);
         if (!inRangeTick(tick))
             continue;
 
         int32_t const ti          = static_cast<int32_t>(tick);
         int32_t const best_before = best_ask_tick_;
-        applyAskTick(tick, msg.asks[i].qty_lots);
+        applyAskTick(tick, static_cast<uint64_t>(msg.asks[i].size));
         bool const best_changed = (best_ask_tick_ != best_before);
         bool const may_affect_ladder =
             (ask_ladder_tail_tick_ < 0) || (ask_ladder_filled_ < Depth) ||
@@ -237,12 +231,21 @@ void OrderBook<Depth>::onUpdate(FeedMessage const& msg)
         refillAskLadder();
 }
 
+template <uint8_t Depth>
+void OrderBook<Depth>::update(L2Update const& msg) {
+    if (msg.isSnapshot) {
+        onSnapshot(msg);
+    } else {
+        onUpdate(msg);
+    }
+}
+
 // ── Display accessors ─────────────────────────────────────────────────────────
 
 template <uint8_t Depth>
 double OrderBook<Depth>::mid() const
 {
-    if (bid_[0].qty_lots == 0 || ask_[0].qty_lots == 0)
+    if (bid_[0].size == 0 || ask_[0].size == 0)
         return 0.0;
     return 0.5 * (priceFromTick(bid_[0].tick) + priceFromTick(ask_[0].tick));
 }
@@ -250,7 +253,7 @@ double OrderBook<Depth>::mid() const
 template <uint8_t Depth>
 double OrderBook<Depth>::spread() const
 {
-    if (bid_[0].qty_lots == 0 || ask_[0].qty_lots == 0)
+    if (bid_[0].size == 0 || ask_[0].size == 0)
         return 0.0;
     return priceFromTick(ask_[0].tick) - priceFromTick(bid_[0].tick);
 }
