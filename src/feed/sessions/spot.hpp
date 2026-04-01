@@ -3,10 +3,10 @@
 #include "feed/models/product.hpp"
 #include <charconv>
 
-class MarkSession : public Session<MarkSession, DeltaWebsocketClient> {
+class SpotSession : public Session<SpotSession, DeltaWebsocketClient> {
 public:
-    explicit MarkSession(DeltaWebsocketClient& client, SessionID sessionID)
-        : Session<MarkSession, DeltaWebsocketClient>(client, sessionID) {}
+    explicit SpotSession(DeltaWebsocketClient& client, SessionID sessionID)
+        : Session<SpotSession, DeltaWebsocketClient>(client, sessionID) {}
 
     static double toDouble(std::string_view sv) {
         double val = 0.0;
@@ -14,24 +14,10 @@ public:
         return val;
     }
 
-    void parsePriceBand(simdjson::ondemand::value val, MarkPriceData::PriceBand& price_band) {
-        simdjson::ondemand::object band;
-        if (val.get_object().get(band)) return;  // was: continue (invalid outside loop)
-        for (auto f : band) {
-            std::string_view key;
-            if (f.unescaped_key().get(key)) continue;
-            std::string_view value;
-            if (f.value().get_string().get(value)) continue;
-            double price = toDouble(value);
-            if (key == "lower_limit") price_band.lower_limit = price;
-            if (key == "upper_limit") price_band.upper_limit = price;
-        }
-    }
-
     void onMessage(std::string_view msg) {  // was: unnamed parameter
         // std::cout<<"[raw msg]: "<<msg<<'\n';
         FeedMessage* slot = client_.get_ring_slot();
-        slot->type = FeedMessage::Type::MarkPrice;
+        slot->type = FeedMessage::Type::SpotPrice;
 
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
@@ -42,28 +28,25 @@ public:
         for (auto field : doc.get_object()) {
             std::string_view key;
             if (field.unescaped_key().get(key)) continue;
-            if (key == "price") {
-                std::string_view price_str;
-                if (field.value().get_string().get(price_str)) continue;
-                (*slot).mark_price.price = toDouble(price_str);
-            } else if (key == "price_band") {
-                parsePriceBand(field.value(), (*slot).mark_price.price_band);  // was: parseLevels
+            if (key == "p") {
+                double price = 0.0;
+                if (field.value().get_double().get(price)) continue;
+                (*slot).spot_price.price = price;
             } else if (key == "timestamp") {
                 if (field.value().get_uint64().get((*slot).mark_price.timestamp)) {}  // was: (*slot).l2.timestamp
-            } else if (key == "symbol") {
-                std::string_view symbol;
-                if (field.value().get_string().get(symbol)) return;
-                if (symbol.starts_with("MARK:")) symbol.remove_prefix(5);
-                (*slot).mark_price.instrument_id = client_.products_.idfromSymbol(symbol);
+            } else if (key == "s") {
+                std::string_view index_symbol;
+                if (field.value().get_string().get(index_symbol)) return;
+                (*slot).spot_price.instrument_id = client_.products_.idfromIndexSymbol(index_symbol);
             }
         }
 
-        if ((*slot).mark_price.instrument_id == UINT8_MAX) return;
+        if ((*slot).spot_price.instrument_id == UINT8_MAX) return;
 
         slot->t_kernel = parser_.t_kernel;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
-        (*slot).instrument_id = (*slot).mark_price.instrument_id;
+        (*slot).instrument_id = (*slot).spot_price.instrument_id;
         client_.commit_to_ring();
     }
 
@@ -74,8 +57,8 @@ public:
         std::string symbols_str;
         for (uint8_t i = 0; i < prods.count; ++i) {
             if (i > 0) symbols_str += ',';
-            symbols_str += R"("MARK:)";
-            symbols_str += prods[i].symbol;
+            symbols_str += '"';
+            symbols_str += prods[i].index_symbol;
             symbols_str += '"';
         }
 
@@ -93,5 +76,5 @@ public:
     }
 
 private:
-    std::string channel_{"mark_price"};
+    std::string channel_{"v2/spot_price"};
 };

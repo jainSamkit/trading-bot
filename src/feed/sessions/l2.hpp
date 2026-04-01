@@ -129,7 +129,10 @@ public:
 
         const Product& product = client_.products_[(*slot).l2.instrument_id];
         convertToTick(slot->l2, product);
-        
+
+        slot->t_kernel = parser_.t_kernel;
+        slot->t_frame  = parser_.t_frame;
+        slot->t_parse  = now_ns();
         (*slot).instrument_id = (*slot).l2.instrument_id;
         client_.commit_to_ring();
         // const int64_t t_parse = now_ns();

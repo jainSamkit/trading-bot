@@ -16,6 +16,8 @@
 class L2UpdateSession;
 class TickerSession;
 class MarkSession;
+class SpotSession;
+class OHLCSession;
 
 class DeltaWebsocketClient : public WebSocketClient<DeltaWebsocketClient> {
 public:
@@ -124,6 +126,8 @@ private:
     std::unique_ptr<L2UpdateSession> l2UpdateSession_;
     std::unique_ptr<TickerSession>   tickerSession_;
     std::unique_ptr<MarkSession>     markSession_;
+    std::unique_ptr<SpotSession>     spotSession_;
+    std::unique_ptr<OHLCSession>     ohlcSession_;
     SpscRing<FeedMessage, 4096>* ring_;
 
     bool shutdown_ = false;
@@ -133,6 +137,8 @@ private:
 #include "feed/sessions/l2.hpp"
 #include "feed/sessions/mark.hpp"
 #include "feed/sessions/ticker.hpp"
+#include "feed/sessions/spot.hpp"
+#include "feed/sessions/ohlc.hpp"
 
 inline DeltaWebsocketClient::~DeltaWebsocketClient() {
     if (!shutdown_)
@@ -140,9 +146,15 @@ inline DeltaWebsocketClient::~DeltaWebsocketClient() {
 }
 
 inline void DeltaWebsocketClient::start() {
-    if (!l2UpdateSession_->init())
-        return;
+    if (!l2UpdateSession_->init())return;
+    if (!markSession_->init())return;
+    if (!spotSession_->init()) return;
+    if (!ohlcSession_->init()) return;
+
     l2UpdateSession_->subscribe();
+    markSession_->subscribe();
+    spotSession_->subscribe();
+    ohlcSession_->subscribe();
 
     run_loop(static_cast<DeltaWebsocketClient*>(this));
 }
@@ -155,6 +167,8 @@ inline void DeltaWebsocketClient::shutdownReactor() {
     l2UpdateSession_->destroy();
     tickerSession_->destroy();
     markSession_->destroy();
+    spotSession_->destroy();
+    ohlcSession_->destroy();
 
     if (efd_ >= 0) {
         epoll_ctl(epfd_, EPOLL_CTL_DEL, efd_, nullptr);
@@ -174,6 +188,8 @@ inline DeltaWebsocketClient::DeltaWebsocketClient(
     , l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
     , tickerSession_(std::make_unique<TickerSession>(*this, SessionID::Ticker))
     , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark))
+    , spotSession_(std::make_unique<SpotSession>(*this, SessionID::Spot))
+    , ohlcSession_(std::make_unique<OHLCSession>(*this, SessionID::OHLC))
     , ring_(ring)
 {
     WebSocketClient::host = host ? host : "";

@@ -7,6 +7,8 @@ enum class SessionStatus : uint8_t {
 enum class SessionID : uint16_t {
     L2Update,
     Mark,
+    Spot,
+    OHLC,
     Ticker
 };
 

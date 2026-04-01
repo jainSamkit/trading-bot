@@ -23,6 +23,7 @@ int main(int argc, char** argv)
     products.add({
         .exchange_id       = 27,
         .symbol            = "BTCUSD",
+        .index_symbol      = ".DEXBTUSD",
         .tick_size         = 0.5,
         .contract_value    = 1.0,
         .lower_bound_price = 0.0,
@@ -31,14 +32,14 @@ int main(int argc, char** argv)
     // products.add({
     //     .exchange_id       = 139,
     //     .symbol            = "SOLUSD",
-    //     .tick_size         = 0.01,
+    //     .tick_size         = 0.001,
     //     .contract_value    = 1.0,
     //     .lower_bound_price = 0.0,
-    //     .upper_bound_price = 1000.0,
+    //     .upper_bound_price = 100.0,
     // });
 
-    SpscRing<FeedMessage, 4096> feedRing;
-    MarketState marketState(feedRing, products);
+    auto feedRing    = std::make_unique<SpscRing<FeedMessage, 4096>>();
+    auto marketState = std::make_unique<MarketState>(*feedRing, products);
 
     std::string host = "socket.india.delta.exchange";
     int         port = 443;
@@ -53,10 +54,10 @@ int main(int argc, char** argv)
 
     // market state spins on its own thread
     std::thread market_thread([&]() {
-        marketState.run(g_running);
+        marketState->run(g_running);
     });
 
-    DeltaWebsocketClient client(host.c_str(), port, path.c_str(), products, &feedRing);
+    DeltaWebsocketClient client(host.c_str(), port, path.c_str(), products, feedRing.get());
     g_client = &client;
 
     std::cerr << "[delta] " << host << ":" << port << path << "\n";

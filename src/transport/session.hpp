@@ -22,8 +22,6 @@ public:
 
     void forward_message(std::string_view m) { 
         if(isHeartbeat(m)) {
-            std::cout<<"Got heartbeat"<<" "<<m.size()<<"\n\n\n";
-            std::cout << m << "\n\n\n";
             arm_timer_ms(ClientDerived::HEARTBEAT_TIMEOUT_MS);
             return;
         }
@@ -103,6 +101,7 @@ public:
     }
 
     void disconnect() {
+        std::cerr << "[session " << (int)ctx_.id << "] disconnected\n";
         ctx_.status = Status::DISCONNECTED;
         client_.onsessionDelete(ctx_);
 
@@ -133,15 +132,20 @@ public:
 
                 case Status::RECONNECTING:
                     if (reconnects >= MAX_RECONNECTS) {
+                        std::cerr << "[session " << (int)ctx_.id << "] max reconnects reached\n";
                         destroy();
                         return;
                     }
+                    std::cerr << "[session " << (int)ctx_.id << "] reconnect attempt " << (int)(reconnects + 1) << "\n";
                     if (init(false)) {
                         reconnects = 0;
+                        std::cerr << "[session " << (int)ctx_.id << "] reconnected — resubscribing\n";
+                        subscribe();
                         return;
                     }
                     {
                         uint32_t delay_ms = base_wait + (1u << reconnects) * 1000;
+                        std::cerr << "[session " << (int)ctx_.id << "] init failed — retrying in " << delay_ms << "ms\n";
                         reconnects += 1;
                         if (arm_timer_ms(delay_ms) < 0)
                             destroy();

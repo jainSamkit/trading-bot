@@ -543,8 +543,9 @@ struct WebSocketClient {
                                 break;
 
                             case 0x8: // close
-                                std::cout << "server sent close\n";
+                                std::cerr << "[session " << (int)slot->ctx->id << "] server sent WS close\n";
                                 ws_send(ssl, "", 0x8);
+                                session.reconnect();
                                 return;
 
                             default:
@@ -559,13 +560,13 @@ struct WebSocketClient {
                 break;
 
             if (err == SSL_ERROR_ZERO_RETURN) {
-                std::cout << "server closed TLS connection\n";
+                std::cerr << "[session " << (int)slot->ctx->id << "] server closed TLS\n";
                 session.reconnect();
                 return;
             }
 
             if (err == SSL_ERROR_SYSCALL) {
-                perror("SSL_read syscall error");
+                std::cerr << "[session " << (int)slot->ctx->id << "] SSL_read syscall: " << strerror(errno) << "\n";
                 session.reconnect();
                 return;
             }
@@ -597,8 +598,10 @@ struct WebSocketClient {
                 break;
             drained = true;
         }
-        if (drained)
+        if (drained) {
+            std::cerr << "[session " << (int)slot->ctx->id << "] heartbeat timeout — reconnecting\n";
             session.reconnect();
+        }
     }
 
     void run_loop(DerivedClient* client) {
