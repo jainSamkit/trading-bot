@@ -11,7 +11,12 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libboost-dev \
     liburing-dev \
-    && rm -rf /var/lib/apt/lists/*
+    linux-tools-common \
+    linux-tools-generic \
+    gdb \
+    valgrind \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -fs /usr/lib/linux-tools/*/perf /usr/bin/perf
 
 WORKDIR /trading-bot
 

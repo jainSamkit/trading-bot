@@ -1,3 +1,5 @@
 # CMake — always reconfigure on a new machine / in Docker (paths differ from host cache).
 /build/
+/build-test/
 cmake-build-*/
+/practice/

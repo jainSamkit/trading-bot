@@ -3,7 +3,6 @@
 #include "core/orderbook/orderbook.hpp"
 #include "feed/sessions/types.hpp"
 #include "feed/models/product.hpp"
-#include "market_state/types.hpp"
 #include "market_state/latency_stats.hpp"
 #include "market_state/ohlc_ring.hpp"
 #include <atomic>
@@ -22,6 +21,7 @@ static inline int64_t ms_now_ns() {
 
 class MarketState {
     static constexpr uint8_t MAX_INSTRUMENTS = ProductTable::MAX_INSTRUMENTS;
+    static constexpr size_t BOOK_DEPTH = 10;
 
 public:
     explicit MarketState(SpscRing<FeedMessage, 4096>& ring, const ProductTable& products)
