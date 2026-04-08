@@ -1,10 +1,10 @@
 #pragma once
 #include "core/spsc_ring.hpp"
 #include "delta_exchange/ws_client.hpp"
-#include "feed/sessions/types.hpp"
+#include "delta_exchange/sessions/types.hpp"
 #include "ipc/shared_state.hpp"
 #include "market_state/market_state.hpp"
-#include "models/product.hpp"
+#include "delta_exchange/models/product.hpp"
 #include <atomic>
 #include <csignal>
 #include <concepts>

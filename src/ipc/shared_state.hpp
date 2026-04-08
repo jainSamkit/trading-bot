@@ -1,5 +1,5 @@
 #pragma once
-#include "models/product.hpp"
+#include "delta_exchange/models/product.hpp"
 #include "core/seq_lock.hpp"
 #include "ipc/snapshots.hpp"
 #include <cstdint>

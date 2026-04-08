@@ -1,6 +1,5 @@
-#include "delta_exchange/product_fetcher.hpp"
+#include "delta_exchange/api/product.hpp"
 #include "market_state/market_state.hpp"
-#include "models/product.hpp"
 #include "processes/feed.hpp"
 #include "ipc/shm.hpp"
 #include <sys/wait.h>

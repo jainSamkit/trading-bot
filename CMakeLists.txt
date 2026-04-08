@@ -75,6 +75,16 @@ add_compile_options(
 # ── Sources (match tree under src/) ────────────────────────────────────────────
 add_executable(trading_bot
     src/main.cpp
+    src/transport/http_client.cpp
+    src/delta_exchange/rest_client.cpp
+    src/delta_exchange/ws_client.cpp
+    src/delta_exchange/api/product.cpp
+    src/delta_exchange/api/order.cpp
+    src/delta_exchange/api/position.cpp
+    src/delta_exchange/api/wallet.cpp
+    src/delta_exchange/api/fill.cpp
+    src/market_state/latency_stats.cpp
+    src/market_state/market_state.cpp
 )
 
 target_link_libraries(trading_bot PRIVATE

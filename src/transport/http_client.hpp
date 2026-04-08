@@ -10,12 +10,7 @@ public:
 
     virtual ~TcpClient() = default;
 
-    bool connect() {
-        client_ = std::make_unique<httplib::SSLClient>(host_, port_);
-        client_->set_connection_timeout(5);
-        client_->set_read_timeout(10);
-        return true;
-    }
+    bool connect();
 
     bool is_connected() const { return client_ != nullptr; }
     void disconnect()         { client_.reset(); }
@@ -25,29 +20,19 @@ protected:
     // empty string means no query params
     httplib::Result get(const std::string& path,
                         const std::string& query,
-                        const httplib::Headers& headers = {}) {
-        std::string full = query.empty() ? path : path + "?" + query;
-        return client_->Get(full, headers);
-    }
+                        const httplib::Headers& headers = {});
 
     httplib::Result post(const std::string& path,
                          const std::string& body,
-                         const httplib::Headers& headers = {}) {
-        return client_->Post(path, headers, body, "application/json");
-    }
+                         const httplib::Headers& headers = {});
 
     httplib::Result put(const std::string& path,
                         const std::string& body,
-                        const httplib::Headers& headers = {}) {
-        return client_->Put(path, headers, body, "application/json");
-    }
+                        const httplib::Headers& headers = {});
 
     httplib::Result del(const std::string& path,
                         const std::string& query,
-                        const httplib::Headers& headers = {}) {
-        std::string full = query.empty() ? path : path + "?" + query;
-        return client_->Delete(full, headers);
-    }
+                        const httplib::Headers& headers = {});
 
     const char* host_;
     int         port_;

@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <vector>
-#include "feed/sessions/types.hpp"
+#include "delta_exchange/sessions/types.hpp"
 
 // ── OrderBook<Depth> ──────────────────────────────────────────────────────────
 // Dense book in integer tick space + integer lot counts. No floating point on

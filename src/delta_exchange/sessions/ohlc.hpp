@@ -1,6 +1,6 @@
 #pragma once
-#include "feed/sessions/types.hpp"
-#include "models/product.hpp"
+#include "delta_exchange/sessions/types.hpp"
+#include "delta_exchange/models/product.hpp"
 #include <charconv>
 
 class OHLCSession : public Session<OHLCSession, DeltaWebsocketClient> {
