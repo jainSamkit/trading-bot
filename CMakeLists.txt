@@ -58,6 +58,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(simdjson)
 
+FetchContent_Declare(
+    httplib
+    URL https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.1.zip
+)
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE ON)
+set(HTTPLIB_REQUIRE_OPENSSL ON)
+FetchContent_MakeAvailable(httplib)
+
 # ── Compiler warnings ──────────────────────────────────────────────────────────
 add_compile_options(
     -Wall -Wextra -Wpedantic
@@ -74,6 +82,7 @@ target_link_libraries(trading_bot PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
     simdjson
+    httplib::httplib
 )
 if(TARGET Boost::headers)
     target_link_libraries(trading_bot PRIVATE Boost::headers)

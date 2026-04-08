@@ -9,7 +9,7 @@
 #include <sys/eventfd.h>
 #include <sys/timerfd.h>
 #include "simdjson.h"
-#include "feed/models/product.hpp"
+#include "models/product.hpp"
 #include "feed/sessions/types.hpp"
 #include "core/spsc_ring.hpp"
 
@@ -22,7 +22,7 @@ class OHLCSession;
 class DeltaWebsocketClient : public WebSocketClient<DeltaWebsocketClient> {
 public:
     DeltaWebsocketClient(const char* host, int port, const char* path,
-                         const ProductTable& products, SpscRing<FeedMessage,4096>* ring);
+                         const ProductTable& products, SpscRing<FeedMessage,4096>* const ring, const ProductGroup& product_groups);
 
     ~DeltaWebsocketClient();
 
@@ -117,18 +117,19 @@ public:
 
     simdjson::ondemand::parser& get_parser() { return feed_parser_; }
 
-    const ProductTable products_;
+    const ProductTable& products_;
+    const ProductGroup& product_groups_;
 
 protected:
     simdjson::ondemand::parser feed_parser_;
 
 private:
-    std::unique_ptr<L2UpdateSession> l2UpdateSession_;
-    std::unique_ptr<TickerSession>   tickerSession_;
-    std::unique_ptr<MarkSession>     markSession_;
-    std::unique_ptr<SpotSession>     spotSession_;
-    std::unique_ptr<OHLCSession>     ohlcSession_;
-    SpscRing<FeedMessage, 4096>* ring_;
+    std::unique_ptr<L2UpdateSession>        l2UpdateSession_;
+    std::unique_ptr<TickerSession>          tickerSession_;
+    std::unique_ptr<MarkSession>            markSession_;
+    std::unique_ptr<SpotSession>            spotSession_;
+    std::unique_ptr<OHLCSession>            ohlcSession_;
+    SpscRing<FeedMessage, 4096>* const      ring_;
 
     bool shutdown_ = false;
     EpollSlot eventFDSlot;
@@ -183,8 +184,9 @@ inline void DeltaWebsocketClient::shutdownReactor() {
 
 inline DeltaWebsocketClient::DeltaWebsocketClient(
     const char* host, int port, const char* path,
-    const ProductTable& products, SpscRing<FeedMessage, 4096>* ring)
+    const ProductTable& products, SpscRing<FeedMessage, 4096>* const ring, const ProductGroup& product_groups)
     : products_(products)
+    , product_groups_(product_groups)
     , l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
     , tickerSession_(std::make_unique<TickerSession>(*this, SessionID::Ticker))
     , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark))

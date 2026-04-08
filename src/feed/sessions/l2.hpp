@@ -1,6 +1,6 @@
 #pragma once
 #include "feed/sessions/types.hpp"
-#include "feed/models/product.hpp"
+#include "models/product.hpp"
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
@@ -145,11 +145,14 @@ public:
 
     void onSubscribe() {
         const auto& prods = client_.products_;
+        const auto& instrument_ids = client_.product_groups_.instrument_ids;
+
         std::string symbols_str;
-        for (uint8_t i = 0; i < prods.count; ++i) {
+        for (uint8_t i = 0; i < instrument_ids.size(); ++i) {
+            uint8_t instrument_id = instrument_ids[i];
             if (i > 0) symbols_str += ',';
             symbols_str += '"';
-            symbols_str += prods[i].symbol;
+            symbols_str += prods[instrument_id].symbol;
             symbols_str += '"';
         }
 
@@ -160,6 +163,7 @@ public:
             + symbols_str
             + R"(]}]}})";
 
+        std::cout<<msg<<'\n';
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaWebsocketClient::HEARTBEAT_TIMEOUT_MS);

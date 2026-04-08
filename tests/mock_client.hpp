@@ -1,6 +1,6 @@
 #pragma once
 #include "transport/wsclient.hpp"
-#include "delta_exchange/models/product.hpp"
+#include "models/product.hpp"
 #include <sys/socket.h>
 #include <unistd.h>
 #include <vector>

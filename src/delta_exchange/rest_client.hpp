@@ -1,8 +1,8 @@
 #pragma once
 #include "transport/http_client.hpp"
-#include "core/models/order.hpp"
-#include "core/models/position.hpp"
-#include "core/models/product.hpp"
+#include "models/order.hpp"
+#include "models/position.hpp"
+#include "models/product.hpp"
 #include <chrono>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
@@ -10,14 +10,21 @@
 
 class DeltaRestClient : public TcpClient {
 public:
-    DeltaRestClient(const char* api_key, const char* api_secret)
-        : TcpClient("api.delta.exchange"),
+    DeltaRestClient(const char* host, const char* api_key, const char* api_secret)
+        : TcpClient(host),
           api_key_(api_key),
           api_secret_(api_secret) {}
 
+    
     // products
     httplib::Result get_products(const std::string& query = "") {
         return get("/v2/products", query, auth_headers("GET", "/v2/products", query, ""));
+    }
+
+    // public endpoint — no auth needed
+    httplib::Result get_product(const std::string& symbol) {
+        std::string path = "/v2/products/" + symbol;
+        return get(path, "", {{"User-Agent", "trading-bot/1.0"}});
     }
 
     // orders

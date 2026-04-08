@@ -1,6 +1,6 @@
 #pragma once
 #include "feed/sessions/types.hpp"
-#include "feed/models/product.hpp"
+#include "models/product.hpp"
 #include <charconv>
 
 class MarkSession : public Session<MarkSession, DeltaWebsocketClient> {
@@ -71,14 +71,17 @@ public:
 
     void onSubscribe() {
         const auto& prods = client_.products_;
+        const auto& instrument_ids = client_.product_groups_.instrument_ids;
+
         std::string symbols_str;
-        for (uint8_t i = 0; i < prods.count; ++i) {
+        for (uint8_t i = 0; i < instrument_ids.size(); ++i) {
+            uint8_t instrument_id = instrument_ids[i];
             if (i > 0) symbols_str += ',';
             symbols_str += R"("MARK:)";
-            symbols_str += prods[i].symbol;
+            symbols_str += prods[instrument_id].symbol;
             symbols_str += '"';
         }
-
+        
         std::string msg =
             R"({"type":"subscribe","payload":{"channels":[{"name":")"
             + channel_

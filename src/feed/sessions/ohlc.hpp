@@ -1,6 +1,6 @@
 #pragma once
 #include "feed/sessions/types.hpp"
-#include "feed/models/product.hpp"
+#include "models/product.hpp"
 #include <charconv>
 
 class OHLCSession : public Session<OHLCSession, DeltaWebsocketClient> {
@@ -72,21 +72,26 @@ public:
 
     void onSubscribe() {
         const auto& prods = client_.products_;
+        const auto& instrument_ids = client_.product_groups_.instrument_ids;
+
         std::string symbols_str;
         std::string mark_symbols_str;
 
-        for (uint8_t i = 0; i < prods.count; ++i) {
+        for (uint8_t i = 0; i < instrument_ids.size(); ++i) {
+            uint8_t instrument_id = instrument_ids[i];
+
             if (i > 0) symbols_str += ',';
             symbols_str += '"';
-            symbols_str += prods[i].symbol;
+            symbols_str += prods[instrument_id].symbol;
             symbols_str += '"';
         }
 
-        for (uint8_t i = 0; i < prods.count; ++i) {
+        for (uint8_t i = 0; i < instrument_ids.size(); ++i) {
+            uint8_t instrument_id = instrument_ids[i];
             if (i > 0) mark_symbols_str += ',';
             mark_symbols_str += '"';
             mark_symbols_str += "MARK:";
-            mark_symbols_str += prods[i].symbol;
+            mark_symbols_str += prods[instrument_id].symbol;
             mark_symbols_str += '"';
         }
 

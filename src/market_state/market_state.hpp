@@ -2,7 +2,7 @@
 #include "core/spsc_ring.hpp"
 #include "core/orderbook/orderbook.hpp"
 #include "feed/sessions/types.hpp"
-#include "feed/models/product.hpp"
+#include "models/product.hpp"
 #include "market_state/latency_stats.hpp"
 #include "market_state/ohlc_ring.hpp"
 #include <atomic>
@@ -18,28 +18,24 @@ static inline int64_t ms_now_ns() {
     return ts.tv_sec * 1'000'000'000LL + ts.tv_nsec;
 }
 
-
 class MarketState {
     static constexpr uint8_t MAX_INSTRUMENTS = ProductTable::MAX_INSTRUMENTS;
     static constexpr size_t BOOK_DEPTH = 10;
 
 public:
-    explicit MarketState(SpscRing<FeedMessage, 4096>& ring, const ProductTable& products)
-        : ring_(ring), products_(products) {
-        for (uint8_t i = 0; i < products_.count; ++i) {
-            const Product& p = products_[i];
-            orderbooks_[i].init(p.internal_id,
-                                p.lower_bound_price,
-                                p.upper_bound_price,
-                                p.tick_size);
-        }
+    explicit MarketState(SpscRing<FeedMessage, 4096>* const ring, const ProductTable& products, const ProductGroup& product_group)
+        : ring_(ring), products_(products), product_group_(product_group) {
+
+        for (uint8_t instrument_id : product_group_.instrument_ids)
+            instrument_valid_[instrument_id] = true;
+        // Orderbooks are initialized lazily on the first L2 snapshot for each instrument.
     }
 
     void run(std::atomic<bool>& running) {
         int64_t last_print_ns = ms_now_ns();
 
         while (running.load(std::memory_order_relaxed)) {
-            auto msg = ring_.pop();
+            auto msg = ring_ -> pop();
             if (!msg) {
                 const int64_t now = ms_now_ns();
                 if (now - last_print_ns >= 1'000'000'000LL) {
@@ -49,14 +45,15 @@ public:
                         {"5m",  2},
                         {"30m", 4},
                     };
-                    for (uint8_t i = 0; i < products_.count; ++i) {
-                        printBook(orderbooks_[i], products_[i].symbol,
-                                  products_[i].tick_size,
-                                  mark_prices_[i], spot_prices_[i]);
+                    for (uint8_t i = 0; i < product_group_.instrument_ids.size(); ++i) {
+                        uint8_t instrument_id = product_group_.instrument_ids[i];
+                        printBook(orderbooks_[instrument_id], products_[instrument_id].symbol,
+                                  products_[instrument_id].tick_size,
+                                  mark_prices_[instrument_id], spot_prices_[instrument_id]);
                         for (const auto& [name, idx] : RES)
-                            printOHLC(products_[i].symbol, name,
-                                      candle_store_[0][i][idx],   // trade
-                                      candle_store_[1][i][idx]);  // mark
+                            printOHLC(products_[instrument_id].symbol, name,
+                                      candle_store_[0][instrument_id][idx],   // trade
+                                      candle_store_[1][instrument_id][idx]);  // mark
                     }
                     last_print_ns = now;
                 }
@@ -67,24 +64,38 @@ public:
             stats_.record(msg->t_kernel, msg->t_frame, msg->t_parse, t_consume);
 
             switch (msg->type) {
-                case FeedMessage::Type::L2Feed:
-                    if (msg->instrument_id < products_.count)
-                        orderbooks_[msg->instrument_id].update(msg->l2);
+                case FeedMessage::Type::L2Feed: {
+                    uint8_t id = msg->instrument_id;
+                    if (!instrument_valid_[id]) break;
+                    if (!orderbook_init_[id]) {
+                        if (!msg->l2.isSnapshot) break;  // wait for snapshot to seed bounds
+                        double max_price = 0.0;
+                        for (uint8_t i = 0; i < msg->l2.ask_count; ++i) {
+                            double p = msg->l2.asks[i].price * products_[id].tick_size;
+                            if (p > max_price) max_price = p;
+                        }
+                        for (uint8_t i = 0; i < msg->l2.bid_count; ++i) {
+                            double p = msg->l2.bids[i].price * products_[id].tick_size;
+                            if (p > max_price) max_price = p;
+                        }
+                        if (max_price == 0.0) break;
+                        orderbooks_[id].init(id, 0.0, max_price * 3.0, products_[id].tick_size);
+                        orderbook_init_[id] = true;
+                    }
+                    orderbooks_[id].update(msg->l2);
                     break;
+                }
 
                 case FeedMessage::Type::MarkPrice:
-                    if (msg->instrument_id < products_.count)
-                        mark_prices_[msg->instrument_id] = msg->mark_price;
+                    if (instrument_valid_[msg->instrument_id]) mark_prices_[msg->instrument_id] = msg->mark_price;
                     break;
 
                 case FeedMessage::Type::SpotPrice:
-                    if (msg->instrument_id < products_.count)
-                        spot_prices_[msg->instrument_id] = msg->spot_price;
+                    if (instrument_valid_[msg->instrument_id]) spot_prices_[msg->instrument_id] = msg->spot_price;
                     break;
 
                 case FeedMessage::Type::OHLC:
-                    if (msg->instrument_id < products_.count)
-                        candle_store_[(msg->ohlc).is_mark][msg->instrument_id][(msg->ohlc).res_idx].push(msg->ohlc);
+                    if (instrument_valid_[msg->instrument_id]) candle_store_[(msg->ohlc).is_mark][msg->instrument_id][(msg->ohlc).res_idx].push(msg->ohlc);
                     break;
 
                 default:
@@ -232,12 +243,15 @@ private:
         std::cout.flush();
     }
 
-    SpscRing<FeedMessage, 4096>& ring_;
-    const ProductTable&           products_;
-    OrderBook<BOOK_DEPTH>         orderbooks_[MAX_INSTRUMENTS];
-    MarkPriceData                 mark_prices_[MAX_INSTRUMENTS]{};
-    LatencyStats                  stats_;
-    SpotPriceData                 spot_prices_[MAX_INSTRUMENTS]{};
+    SpscRing<FeedMessage, 4096>* const      ring_;
+    const ProductTable&                     products_;
+    const ProductGroup&                     product_group_;
+    OrderBook<BOOK_DEPTH>                   orderbooks_[MAX_INSTRUMENTS]{};
+    bool                                    orderbook_init_[MAX_INSTRUMENTS]{};
+    MarkPriceData                           mark_prices_[MAX_INSTRUMENTS]{};
+    LatencyStats                            stats_;
+    SpotPriceData                           spot_prices_[MAX_INSTRUMENTS]{};
+    bool                                    instrument_valid_[MAX_INSTRUMENTS]{};
 
     using ResolutionRings =     std::array<OHLCRing<256>, ohlc_resolutions.size()>;
     using InstrumentCandles =   std::array<ResolutionRings, MAX_INSTRUMENTS>;

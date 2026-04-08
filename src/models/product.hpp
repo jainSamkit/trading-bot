@@ -1,60 +1,88 @@
 #pragma once
-#include "core/models/asset.hpp"
-#include "core/models/index.hpp"
+#include <array>
 #include <cstdint>
-#include <string>
+#include <stdexcept>
+#include <string_view>
 
-// REST model for /products — richer than the feed-side Product in feed/models/product.hpp
-struct ProductInfo {
-    enum class TradingStatus { Operational, DisruptedCancelOnly, DisruptedPostOnly };
-    enum class State         { Live, Upcoming, Expired };
 
-    int64_t       id                              = 0;
-    std::string   symbol;                                 // e.g. "BTCUSD"
-    std::string   description;
-    std::string   product_type;                           // "future" | "inverse_future"
-    std::string   contract_type;                          // "perpetual_futures" | "futures" | "call_options" | "put_options"
-    std::string   settlement_time;                        // ISO timestamp; empty for perps
-    std::string   pricing_source;
+struct ProductGroup {
+    const char* name_;
+    std::vector<uint8_t> instrument_ids; 
+};
 
-    // margin / leverage
-    std::string   initial_margin;                         // BigDecimal string (%)
-    std::string   maintenance_margin;                     // BigDecimal string (%)
-    std::string   initial_margin_scaling_factor;
-    std::string   maintenance_margin_scaling_factor;
-    std::string   default_leverage;
-    std::string   max_leverage_notional;
+struct Product {
+    enum class ContractType : uint8_t { Futures, Options, Perpetual };
+    enum class NotionalType : uint8_t { Vanilla, Inverse };
+
+    uint32_t        exchange_id                         = 0;
+    uint32_t        internal_id                         = 0;
+
+    char            symbol[24]       = {};
+    char            index_symbol[24] = {};
+    ContractType    contract_type    = ContractType::Futures;
+
+    double          initial_margin                      = 0.0;
+    double          maintenance_margin                  = 0.0;
+    double          initial_margin_scaling_factor       = 0.0;
+    double          maintenance_margin_scaling_factor   = 0.0;
+    double          default_leverage                    = 0.0;
+    double          max_leverage_notional               = 0.0;
 
     // contract specs
-    std::string   contract_value;                         // spot price × asset qty per contract
-    std::string   contract_unit_currency;                 // underlying for vanilla, settling for inverse
-    std::string   tick_size;                              // minimum price increment
-    int32_t       impact_size                  = 0;       // typical size used in mark price calc
-    int32_t       position_size_limit          = 0;       // max contracts per order
-    bool          is_quanto                    = false;
+    double          contract_value                      = 0.0;
+    double          inv_contract_value                  = 0.0;
+    double          tick_size                           = 0.0;
+    double          inv_tick_size                       = 0.0;
+    uint32_t        impact_size                         = 0;
+    uint32_t        position_size_limit                 = 0;
 
     // fees
-    std::string   commission_rate;                        // taker fee
-    std::string   maker_commission_rate;                  // maker rebate
-    std::string   liquidation_penalty_factor;
-
-    // funding (perps)
-    std::string   funding_method;                         // "mark_price" | "fixed"
-    std::string   annualized_funding;
+    double          maker_commission_rate               = 0.0;
+    double          taker_commission_rate               = 0.0;
 
     // price limits
-    std::string   price_band;                             // % range around mark price
-    std::string   basis_factor_max_limit;
-
-    TradingStatus trading_status               = TradingStatus::Operational;
-    State         state                        = State::Live;
-
-    std::string   created_at;
-    std::string   updated_at;
-
-    // nested objects
-    Asset         underlying_asset{};
-    Asset         quoting_asset{};
-    Asset         settling_asset{};
-    SpotIndex     spot_index{};
+    double          price_band                          = 0.0;   // % range around mark price
+    double          lower_bound_price                   = 0.0;
+    double          upper_bound_price                   = 0.0;
 };
+
+template<uint8_t N>
+struct ProductTableImpl {
+    static constexpr uint8_t MAX_INSTRUMENTS = N;
+
+    std::array<Product, N> products{};
+    uint8_t count = 0;
+
+    uint8_t add(Product product) {
+        uint8_t id = count++;
+        if (id >= N) throw std::runtime_error("ProductTable: max products exceeded");
+        product.internal_id        = id;
+        product.inv_tick_size      = 1.0 / product.tick_size;
+        product.inv_contract_value = 1.0 / product.contract_value;
+        products[id] = product;
+        return id;
+    }
+
+    const Product& operator[](uint8_t id) const { return products[id]; }
+
+    uint8_t idfromSymbol(std::string_view sym) const {
+        for (uint8_t i = 0; i < count; ++i)
+            if (std::string_view(products[i].symbol) == sym) return i;
+        return UINT8_MAX;
+    }
+
+    uint8_t idfromIndexSymbol(std::string_view sym) const {
+        for (uint8_t i = 0; i < count; ++i)
+            if (std::string_view(products[i].index_symbol) == sym) return i;
+        return UINT8_MAX;
+    }
+
+    uint8_t idfromExchangeID(uint32_t eid) const {
+        for (uint8_t i = 0; i < count; ++i)
+            if (products[i].exchange_id == eid) return i;
+        return UINT8_MAX;
+    }
+};
+
+/// Fixed capacity (64) table used by feed, WS client, and market state.
+using ProductTable = ProductTableImpl<64>;
