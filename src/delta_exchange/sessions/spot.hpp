@@ -5,6 +5,7 @@
 
 class SpotSession : public Session<SpotSession, DeltaWebsocketClient> {
 public:
+    static constexpr SessionType session_type = SessionType::Public;
     explicit SpotSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<SpotSession, DeltaWebsocketClient>(client, sessionID) {}
 
@@ -32,9 +33,9 @@ public:
                 double price = 0.0;
                 if (field.value().get_double().get(price)) continue;
                 (*slot).spot_price.price = price;
-            } else if (key == "timestamp") {
+            } else if (key == "ts") {
                 if (field.value().get_uint64().get((*slot).mark_price.timestamp)) {}  // was: (*slot).l2.timestamp
-            } else if (key == "s") {
+            } else if (key == "sy") {
                 std::string_view index_symbol;
                 if (field.value().get_string().get(index_symbol)) return;
                 (*slot).spot_price.instrument_id = client_.products_.idfromIndexSymbol(index_symbol);
@@ -80,5 +81,5 @@ public:
     }
 
 private:
-    std::string channel_{"v2/spot_price"};
+    std::string channel_{"spot_price"};
 };

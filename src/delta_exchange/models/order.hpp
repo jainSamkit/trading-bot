@@ -1,66 +1,60 @@
 #pragma once
 #include <cstdint>
-#include <string>
+#include <cstring>
 
-enum class OrderSide        { Buy, Sell };
-enum class OrderType        { Limit, Market };
-enum class TimeInForce      { GTC, IOC };       // good-til-cancelled, immediate-or-cancel
-enum class StopOrderType    { None, StopLoss };
-enum class OrderState       { Open, Pending, Closed, Cancelled };
+enum class OrderSide     : uint8_t { Buy, Sell };
+enum class OrderType     : uint8_t { Limit, Market };
+enum class TimeInForce   : uint8_t { GTC, IOC };
+enum class StopOrderType : uint8_t { None, StopLoss };
+enum class OrderState    : uint8_t { Open, Pending, Closed, Cancelled };
+enum class OrderReason   : uint8_t { Unknown, Fill, StopUpdate, StopTrigger, StopCancel, Liquidation, SelfTrade };
 
-// REST request to POST /orders
+// REST request to POST /orders — prices stay as strings (exchange API requirement)
 struct OrderRequest {
     uint32_t    product_id      = 0;
     std::string limit_price;                    // BigDecimal string; omit for market orders
-    int32_t     size            = 0;            // number of contracts
+    int32_t     size            = 0;
     OrderSide   side            = OrderSide::Buy;
     OrderType   order_type      = OrderType::Limit;
     TimeInForce time_in_force   = TimeInForce::GTC;
     bool        post_only       = false;
     bool        reduce_only     = false;
 
-    // stop orders
-    StopOrderType stop_order_type       = StopOrderType::None;
-    std::string   stop_price;                   // BigDecimal string
-    std::string   trail_amount;                 // BigDecimal string; trailing stop distance
-    std::string   stop_trigger_method;          // e.g. "last_traded_price"
+    StopOrderType stop_order_type     = StopOrderType::None;
+    std::string   stop_price;
+    std::string   trail_amount;
+    std::string   stop_trigger_method;
 
-    // market maker protection
     bool        mmp             = false;
-
-    // user-defined tag, max 32 chars
-    std::string client_order_id;
+    uint64_t    client_order_id = 0;   // numeric; convert to string only at REST send
 };
 
-// REST response from GET/POST /orders
+// WS order channel update — no heap strings on hot fields
 struct Order {
-    int64_t       id                = 0;
-    int64_t       user_id           = 0;
+    uint64_t      id                = 0;
     uint32_t      product_id        = 0;
-    std::string   product_symbol;
+    uint8_t       instrument_id     = UINT8_MAX; // index into ProductTable
+    char          symbol[24]        = {};         // e.g. "BTCUSD"
 
-    int32_t       size              = 0;        // original quantity
-    int32_t       unfilled_size     = 0;        // remaining open quantity
+    int32_t       size              = 0;         // original quantity (signed: exchange uses int)
+    uint32_t      filled_size       = 0;         // always >= 0
+    uint32_t      unfilled_size     = 0;         // always >= 0
 
     OrderSide     side              = OrderSide::Buy;
     OrderType     order_type        = OrderType::Limit;
     TimeInForce   time_in_force     = TimeInForce::GTC;
-    std::string   limit_price;                  // BigDecimal string
-    bool          post_only         = false;
-    bool          reduce_only       = false;
-    bool          close_on_trigger  = false;
-
-    StopOrderType stop_order_type   = StopOrderType::None;
-    std::string   stop_price;
-    std::string   trail_amount;
-
     OrderState    state             = OrderState::Open;
+    OrderReason   reason            = OrderReason::Unknown;
 
-    std::string   paid_commission;              // BigDecimal string
-    std::string   commission;                   // BigDecimal string
+    double        limit_price       = 0.0;
+    double        average_fill_price= 0.0;
+    double        paid_commission   = 0.0;
 
+    bool          reduce_only       = false;
     bool          mmp               = false;
-    std::string   client_order_id;
 
-    int64_t       created_at        = 0;        // microseconds since epoch
+    char          fill_id[33]       = {};        // 32-char hex UUID + null; no heap
+    uint64_t      client_order_id   = 0;         // numeric; convert to string only at REST send
+
+    uint64_t      timestamp         = 0;         // WS event timestamp (microseconds)
 };

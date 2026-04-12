@@ -4,7 +4,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
-// #include <iostream>
+#include <iostream>
 // std::ostream& operator<<(std::ostream& os, const L2Level& l) {
 //     return os << "[" << l.price << ", " << l.size << "]";
 // }
@@ -25,10 +25,8 @@
 
 
 class L2UpdateSession : public Session<L2UpdateSession, DeltaWebsocketClient> {
-
-    static constexpr uint8_t MAX_LEVELS = MAX_FEED_LEVELS;
-
 public:
+    static constexpr SessionType session_type = SessionType::Public;
     explicit L2UpdateSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<L2UpdateSession, DeltaWebsocketClient>(client, sessionID) {}
 
@@ -82,12 +80,15 @@ public:
     void onMessage(std::string_view msg) {
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::L2Feed;
+        slot->l2   = L2Update{};   // reset stale ring slot state
 
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
                                      msg.size() + simdjson::SIMDJSON_PADDING);
         if (result.error()) return;
         auto doc = std::move(result.value());
+
+        std::string_view raw_action;  // capture what the exchange actually sent
 
         for (auto field : doc.get_object()) {
             std::string_view key;
@@ -96,18 +97,19 @@ public:
             if (key == "action") {
                 std::string_view action;
                 if (field.value().get_string().get(action)) continue;
-                (*slot).l2.isSnapshot = (action == "snapshot");
-            } else if (key == "asks") {
+                raw_action = action;
+                (*slot).l2.isSnapshot = (action != "update");
+            } else if (key == "a") {
                 (*slot).l2.ask_count = parseLevels(field.value(), (*slot).l2.asks);
-            } else if (key == "bids") {
+            } else if (key == "b") {
                 (*slot).l2.bid_count = parseLevels(field.value(), (*slot).l2.bids);
-            } else if (key == "sequence_no") {
+            } else if (key == "seq") {
                 if (field.value().get_uint64().get((*slot).l2.sequence_no)) return;
-            } else if (key == "symbol") {
+            } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
                 (*slot).l2.instrument_id = client_.products_.idfromSymbol(symbol);
-            } else if (key == "timestamp") {
+            } else if (key == "ts") {
                 if(field.value().get_uint64().get((*slot).l2.timestamp)) {};
             }
         }
@@ -115,20 +117,38 @@ public:
         if ((*slot).l2.instrument_id == UINT8_MAX)
             return;
 
-        if ((*slot).l2.isSnapshot) {
-            seq_no_[(*slot).l2.instrument_id] = (*slot).l2.sequence_no;
-            book_valid_[(*slot).l2.instrument_id] = true;
-        } else {
-            if (seq_no_[(*slot).l2.instrument_id] + 1 != (*slot).l2.sequence_no) {
-                book_valid_[(*slot).l2.instrument_id] = false;
-                seq_no_[(*slot).l2.instrument_id] = 0;
-                return;
-            }
-            seq_no_[(*slot).l2.instrument_id] = (*slot).l2.sequence_no;
-        }
-
         const Product& product = client_.products_[(*slot).l2.instrument_id];
         convertToTick(slot->l2, product);
+
+        // const L2Update& u = slot->l2;
+        // std::cout << "L2Update{"
+        //           << " sym=" << product.symbol
+        //           << " seq=" << u.sequence_no
+        //           << " snap=" << u.isSnapshot
+        //           << " asks(" << (int)u.ask_count << "):";
+        // for (uint8_t i = 0; i < u.ask_count; ++i)
+        //     std::cout << " [" << u.asks[i].price << "," << u.asks[i].size << "]";
+        // std::cout << " bids(" << (int)u.bid_count << "):";
+        // for (uint8_t i = 0; i < u.bid_count; ++i)
+        //     std::cout << " [" << u.bids[i].price << "," << u.bids[i].size << "]";
+        // std::cout << " }\n";
+
+        uint8_t id = (*slot).l2.instrument_id;
+        if (!book_valid_[id]) {
+            seq_no_[id]    = (*slot).l2.sequence_no;
+            book_valid_[id] = true;
+            (*slot).l2.isSnapshot = true;
+        } else {
+            if (seq_no_[id] + 1 != (*slot).l2.sequence_no) {
+                std::cerr << "[l2] seq gap: expected " << seq_no_[id] + 1
+                          << " got " << (*slot).l2.sequence_no << " — dropping\n";
+                book_valid_[id] = false;
+                seq_no_[id]    = 0;
+                return;
+            }
+            seq_no_[id] = (*slot).l2.sequence_no;
+            (*slot).l2.isSnapshot = false;
+        }
 
         slot->t_kernel = parser_.t_kernel;
         slot->t_frame  = parser_.t_frame;
@@ -169,13 +189,14 @@ public:
         arm_timer_ms(DeltaWebsocketClient::HEARTBEAT_TIMEOUT_MS);
     }
 
-    void onAuth() {}
+    void onAuth() {return;}
 
     bool bookValid(uint8_t id) const { return book_valid_[id]; }
     uint64_t seqNo(uint8_t id) const { return seq_no_[id]; }
 
 private:
-    std::string channel_{"l2_updates"};
+    static constexpr uint8_t MAX_LEVELS = MAX_FEED_LEVELS;
+    std::string channel_{"ob_updates"};
     uint64_t    seq_no_[ProductTable::MAX_INSTRUMENTS]{};
     bool        book_valid_[ProductTable::MAX_INSTRUMENTS]{};
 };

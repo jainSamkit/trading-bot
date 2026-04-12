@@ -1,15 +1,14 @@
-#include "delta_exchange/ws_client.hpp"
+#include "delta_exchange/oms_ws_client.hpp"
 
-DeltaWebsocketClient::DeltaWebsocketClient(
-    const char* host, int port, const char* path,
-    const ProductTable& products, SpscRing<FeedMessage, 4096>* const ring, const ProductGroup& product_groups)
+DeltaOMSWebsocketClient::DeltaOMSWebsocketClient(
+    const char* host, int port, const char* path, const char* api_key, const char* api_secret,
+    const ProductTable& products, SpscRing<OMSEvent, 256>* const ring)
     : products_(products)
-    , product_groups_(product_groups)
-    , l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
-    , tickerSession_(std::make_unique<TickerSession>(*this, SessionID::Ticker))
-    , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark))
-    , spotSession_(std::make_unique<SpotSession>(*this, SessionID::Spot))
-    , ohlcSession_(std::make_unique<OHLCSession>(*this, SessionID::OHLC))
+    , api_key_(api_key ? api_key : "")
+    , api_secret_(api_secret ? api_secret : "")
+    , orderSession_(std::make_unique<OrderSession>(*this, SessionID::Order))
+    , positionFillSession_(std::make_unique<PositionFillSession>(*this, SessionID::Position))
+    , walletSession_(std::make_unique<WalletSession>(*this, SessionID::Wallet))
     , ring_(ring)
 {
     WebSocketClient::host = host ? host : "";
@@ -43,38 +42,34 @@ DeltaWebsocketClient::DeltaWebsocketClient(
         throw std::system_error(errno, std::generic_category(), "epoll_ctl_efd_add");
     }
 
-    WebSocketClient<DeltaWebsocketClient>::efd_ = efd;
+    WebSocketClient<DeltaOMSWebsocketClient>::efd_ = efd;
 }
 
-DeltaWebsocketClient::~DeltaWebsocketClient() {
+DeltaOMSWebsocketClient::~DeltaOMSWebsocketClient() {
     if (!shutdown_)
         shutdownReactor();
 }
 
-void DeltaWebsocketClient::start() {
-    if (!l2UpdateSession_->init())return;
-    if (!markSession_->init())return;
-    if (!spotSession_->init()) return;
-    if (!ohlcSession_->init()) return;
+void DeltaOMSWebsocketClient::start() {
+    if (!orderSession_->init()) return;
+    if (!positionFillSession_->init()) return;
+    if (!walletSession_->init()) return;
 
-    l2UpdateSession_->start();
-    markSession_->start();
-    spotSession_->start();
-    ohlcSession_->start();
+    orderSession_->start();
+    positionFillSession_->start();
+    walletSession_->start();
 
-    run_loop(static_cast<DeltaWebsocketClient*>(this));
+    run_loop(static_cast<DeltaOMSWebsocketClient*>(this));
 }
 
-void DeltaWebsocketClient::shutdownReactor() {
+void DeltaOMSWebsocketClient::shutdownReactor() {
     if (shutdown_)
         return;
     shutdown_ = true;
 
-    l2UpdateSession_->destroy();
-    tickerSession_->destroy();
-    markSession_->destroy();
-    spotSession_->destroy();
-    ohlcSession_->destroy();
+    orderSession_->destroy();
+    positionFillSession_->destroy();
+    walletSession_->destroy();
 
     if (efd_ >= 0) {
         epoll_ctl(epfd_, EPOLL_CTL_DEL, efd_, nullptr);
@@ -87,7 +82,7 @@ void DeltaWebsocketClient::shutdownReactor() {
     }
 }
 
-bool DeltaWebsocketClient::epoll_add(int fd, epoll_event& ev) {
+bool DeltaOMSWebsocketClient::epoll_add(int fd, epoll_event& ev) {
     if (fd < 0)
         return false;
     if (epoll_ctl(epfd_, EPOLL_CTL_ADD, fd, &ev) < 0) {
@@ -103,12 +98,12 @@ bool DeltaWebsocketClient::epoll_add(int fd, epoll_event& ev) {
     return true;
 }
 
-bool DeltaWebsocketClient::epoll_delete(int fd) {
+bool DeltaOMSWebsocketClient::epoll_delete(int fd) {
     epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, NULL);
     return true;
 }
 
-bool DeltaWebsocketClient::onsessionAdd(SessionCtx& ctx, EpollSlot& socketSlot, EpollSlot& timerSlot) {
+bool DeltaOMSWebsocketClient::onsessionAdd(SessionCtx& ctx, EpollSlot& socketSlot, EpollSlot& timerSlot) {
     if (epfd_ < 0) {
         perror("epoll_create1");
         return false;
@@ -138,14 +133,14 @@ bool DeltaWebsocketClient::onsessionAdd(SessionCtx& ctx, EpollSlot& socketSlot, 
     return true;
 }
 
-void DeltaWebsocketClient::onsessionDelete(SessionCtx& ctx) {
+void DeltaOMSWebsocketClient::onsessionDelete(SessionCtx& ctx) {
     if (ctx.fd_ >= 0)
         epoll_delete(ctx.fd_);
     if (ctx.tfd_ >= 0)
         epoll_delete(ctx.tfd_);
 }
 
-bool DeltaWebsocketClient::shutdown() {
+bool DeltaOMSWebsocketClient::shutdown() {
     uint64_t one = 1;
     if (write(efd_, &one, sizeof(one)) != sizeof(one)) {
         perror("eventfd write");

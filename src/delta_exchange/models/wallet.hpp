@@ -1,47 +1,27 @@
 #pragma once
 #include <cstdint>
-#include <string>
+#include <cstring>
 
-enum class TransactionType {
-    PnL,
-    Deposit,
-    Withdrawal,
-    Commission,
-    Conversion,
-    PerpetualFuturesFunding,
-    WithdrawalCancellation,
-    ReferralBonus,
-    CommissionRebate,
-    PromoCredit,
-};
-
-// REST model for /wallet/balances
 struct Wallet {
-    int64_t     asset_id            = 0;
-    std::string asset_symbol;               // e.g. "BTC", "USD"
+    uint64_t    id                          = 0;
+    char        asset_symbol[16]            = {};   // e.g. "USD", "BTC"
 
-    std::string balance;                    // BigDecimal string; total wallet balance
-    std::string order_margin;               // BigDecimal string; blocked in open orders
-    std::string position_margin;           // BigDecimal string; blocked in open positions
-    std::string commission;                 // BigDecimal string; blocked for pending fees
-    std::string available_balance;          // BigDecimal string; free to withdraw or trade
-};
+    double      balance                     = 0.0;  // total wallet balance
+    double      available_balance           = 0.0;  // free to trade/withdraw
+    double      blocked_margin              = 0.0;  // total blocked
+    double      order_margin                = 0.0;  // blocked in open orders
+    double      position_margin             = 0.0;  // blocked in open positions
+    double      cross_position_margin       = 0.0;
+    double      cross_order_margin          = 0.0;
+    double      cross_locked_collateral     = 0.0;
+    double      cross_commission            = 0.0;
+    double      cross_asset_liability       = 0.0;
+    double      commission                  = 0.0;  // pending fees
+    double      portfolio_margin            = 0.0;
+    double      trading_fee_credit          = 0.0;
+    double      pending_trading_fee_credit  = 0.0;
+    double      referral_bonus              = 0.0;
+    double      pending_referral_bonus      = 0.0;
 
-// REST model for /wallet/transactions
-struct Transaction {
-    int64_t         id              = 0;
-    int64_t         user_id         = 0;
-
-    std::string     amount;                 // BigDecimal string; positive = credit, negative = debit
-    std::string     balance;                // BigDecimal string; net balance after this transaction
-
-    TransactionType transaction_type = TransactionType::Deposit;
-
-    // optional — set when transaction relates to a contract (e.g. PnL, funding)
-    uint32_t        product_id      = 0;
-    std::string     product_symbol;
-
-    std::string     meta_data;              // raw JSON string for extra context
-
-    int64_t         created_at      = 0;    // microseconds since epoch
+    uint64_t    timestamp                   = 0;
 };

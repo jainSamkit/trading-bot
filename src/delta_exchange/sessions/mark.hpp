@@ -5,6 +5,8 @@
 
 class MarkSession : public Session<MarkSession, DeltaWebsocketClient> {
 public:
+    static constexpr SessionType session_type = SessionType::Public;
+
     explicit MarkSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<MarkSession, DeltaWebsocketClient>(client, sessionID) {}
 
@@ -14,19 +16,19 @@ public:
         return val;
     }
 
-    void parsePriceBand(simdjson::ondemand::value val, MarkPriceData::PriceBand& price_band) {
-        simdjson::ondemand::object band;
-        if (val.get_object().get(band)) return;  // was: continue (invalid outside loop)
-        for (auto f : band) {
-            std::string_view key;
-            if (f.unescaped_key().get(key)) continue;
-            std::string_view value;
-            if (f.value().get_string().get(value)) continue;
-            double price = toDouble(value);
-            if (key == "lower_limit") price_band.lower_limit = price;
-            if (key == "upper_limit") price_band.upper_limit = price;
-        }
-    }
+    // void parsePriceBand(simdjson::ondemand::value val, MarkPriceData::PriceBand& price_band) {
+    //     simdjson::ondemand::object band;
+    //     if (val.get_object().get(band)) return;  // was: continue (invalid outside loop)
+    //     for (auto f : band) {
+    //         std::string_view key;
+    //         if (f.unescaped_key().get(key)) continue;
+    //         std::string_view value;
+    //         if (f.value().get_string().get(value)) continue;
+    //         double price = toDouble(value);
+    //         if (key == "lower_limit") price_band.lower_limit = price;
+    //         if (key == "upper_limit") price_band.upper_limit = price;
+    //     }
+    // }
 
     void onMessage(std::string_view msg) {  // was: unnamed parameter
         // std::cout<<"[raw msg]: "<<msg<<'\n';
@@ -42,15 +44,15 @@ public:
         for (auto field : doc.get_object()) {
             std::string_view key;
             if (field.unescaped_key().get(key)) continue;
-            if (key == "price") {
+            if (key == "p") {
                 std::string_view price_str;
                 if (field.value().get_string().get(price_str)) continue;
                 (*slot).mark_price.price = toDouble(price_str);
-            } else if (key == "price_band") {
-                parsePriceBand(field.value(), (*slot).mark_price.price_band);  // was: parseLevels
-            } else if (key == "timestamp") {
+            // } else if (key == "sy") {
+            //     parsePriceBand(field.value(), (*slot).mark_price.price_band);  // was: parseLevels
+            } else if (key == "ts") {
                 if (field.value().get_uint64().get((*slot).mark_price.timestamp)) {}  // was: (*slot).l2.timestamp
-            } else if (key == "symbol") {
+            } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
                 if (symbol.starts_with("MARK:")) symbol.remove_prefix(5);

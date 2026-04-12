@@ -1,6 +1,7 @@
 #include "delta_exchange/api/product.hpp"
 #include "market_state/market_state.hpp"
 #include "processes/feed.hpp"
+#include "processes/oms.hpp"
 #include "ipc/shm.hpp"
 #include <sys/wait.h>
 #include <signal.h>
@@ -13,15 +14,6 @@
 #include <vector>
 
 
-static std::vector<FeedProcess<DeltaWebsocketClient>*> g_feeds;
-
-static void on_signal(int)
-{
-    for(auto* f : g_feeds) f->stop();
-    // g_running.store(false, std::memory_order_relaxed);
-    // if (g_client)
-        // g_client->shutdown();
-}
 
 // Signal handlers only receive int sig — store PIDs in process-global state.
 static std::vector<pid_t> g_child_pids;
@@ -75,25 +67,46 @@ int main(int argc, char** argv)
         }
     }
 
-    ProductGroup btc_group {"BTC", {products.idfromSymbol("BTCUSD")}};
+    // ProductGroup btc_group {"BTC", {products.idfromSymbol("BTCUSD")}};
     ProductGroup sol_group {"SOL", {products.idfromSymbol("SOLUSD")}};
-    ProductGroup eth_group {"ETH", {products.idfromSymbol("ETHUSD")}};
+    // ProductGroup eth_group {"ETH", {products.idfromSymbol("ETHUSD")}};
 
     auto shm_trading_bot = ShmOwner<SharedState>::create("/trading_bot_state");
     SharedState* state = shm_trading_bot.get();
 
-    
-    FeedConfig cfg {.host = "socket.india.delta.exchange", .port = 443, .path = "/"};
-    FeedProcess<DeltaWebsocketClient> btc_feed {products, btc_group, state, cfg};
-    FeedProcess<DeltaWebsocketClient> eth_feed {products, eth_group, state, cfg};
+    //samkit testnet public
+    FeedConfig feed_cfg_ {.host = "socket-ind-pub.testnet.deltaex.org", .port = 443, .path = "/"};
 
-    // OmsProcess<DeltaExchange>
-    
+    //papa prod public
+    // FeedConfig feed_cfg_ {.host = "public-socket.india.delta.exchange", .port = 443, .path = "/"};
+    FeedProcess<DeltaWebsocketClient> sol_feed {products, sol_group, state, feed_cfg_};
+    // FeedProcess<DeltaWebsocketClient> btc_feed {products, btc_group, state, cfg};
+    // FeedProcess<DeltaWebsocketClient> eth_feed {products, eth_group, state, cfg};
 
+
+    //samkit testnet private
+    OMSConfig oms_cfg_ {
+        .host = "socket-ind.testnet.deltaex.org",
+        .port = 443, .path = "/", 
+        .api_key = "JiV80pv3OJKlUyisMN2x4BHqnKONW5", 
+        .api_secret = "ELUujrDwVJrK5UiJBkQyBKTJNdVvOOy8OKUuEsjxaeeLWXai6emZYsCFtt40"
+    };
+
+
+    //papa prod config 
+    // OMSConfig oms_cfg_ {
+    //     .host = "socket.india.delta.exchange",
+    //     .port = 443, .path = "/", 
+    //     .api_key = "sbr2TG7ui7GxpUN6lzuoYJzcLuIlVp",
+    //     .api_secret = "sk2zVY2nNAUTDZwmrzH449KCNRCUmWafVvvrVdraTN5js8wvGYuAMy0rsw8C"
+    // };
+
+    OmsProcess<DeltaOMSWebsocketClient> oms_delta {products, oms_cfg_};
     std::vector<FeedProcess<DeltaWebsocketClient>*> feeds;
 
-    feeds.push_back(&btc_feed);
-    feeds.push_back(&eth_feed);
+    // feeds.push_back(&btc_feed);
+    // feeds.push_back(&eth_feed);
+    feeds.push_back(&sol_feed);
     // FeedProcess<DeltaWebsocketClient> sol_feed {products, sol_group, state, cfg};
 
     for(auto* feed : feeds) {
@@ -104,6 +117,14 @@ int main(int argc, char** argv)
         }
         g_child_pids.push_back(pid);
     }
+
+    pid_t pid = fork();
+    if(pid == 0) {
+        oms_delta.start();
+        return 0;
+    }
+
+    g_child_pids.push_back(pid);
 
     std::signal(SIGINT, on_shutdown_signal);
     std::signal(SIGTERM, on_shutdown_signal);

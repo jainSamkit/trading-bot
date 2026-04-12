@@ -1,23 +1,29 @@
 #pragma once
 #include <cstdint>
-#include <string>
+#include <cstring>
 
-// REST model for /positions
+enum class MarginMode     : uint8_t { Isolated, Cross };
+
 struct Position {
-    int64_t     user_id             = 0;
-    uint32_t    product_id          = 0;
-    std::string product_symbol;
+    uint32_t        product_id          = 0;
+    uint8_t         instrument_id       = UINT8_MAX;
+    char            symbol[24]          = {};
 
-    int32_t     size                = 0;    // positive = long, negative = short, 0 = flat
+    int32_t         size                = 0;     // positive = long, negative = short, 0 = flat
 
-    std::string entry_price;                // BigDecimal string; average entry price
-    std::string margin;                     // BigDecimal string; allocated margin
-    std::string liquidation_price;          // BigDecimal string
-    std::string bankruptcy_price;           // BigDecimal string; price of total loss
+    double          entry_price         = 0.0;
+    double          margin              = 0.0;
+    double          liquidation_price   = 0.0;
+    double          bankruptcy_price    = 0.0;
+    double          commission          = 0.0;
+    double          realized_pnl        = 0.0;
+    double          realized_cashflow   = 0.0;
+    double          realized_funding    = 0.0;
 
-    int32_t     adl_level           = 0;    // auto-deleveraging rank 1 (low) – 5 (high)
+    MarginMode      margin_mode         = MarginMode::Isolated;
 
-    std::string commission;                 // BigDecimal string; accumulated commissions
-    std::string realized_pnl;              // BigDecimal string; closed P&L
-    std::string realized_funding;          // BigDecimal string; net funding received/paid
+    bool            auto_topup          = false;
+    bool            under_liquidation   = false;
+
+    uint64_t        timestamp           = 0;
 };

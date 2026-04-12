@@ -4,12 +4,21 @@ enum class SessionStatus : uint8_t {
     RECONNECTING
 };
 
+enum class SessionType : uint8_t {
+    Public, 
+    Private
+};
+
 enum class SessionID : uint16_t {
     L2Update,
     Mark,
     Spot,
     OHLC,
-    Ticker
+    Ticker,
+    Order,
+    Position,
+    Fill,
+    Wallet
 };
 
 enum class Kind: uint8_t {
@@ -25,7 +34,7 @@ struct SessionCtx {
     SessionID id = SessionID::L2Update;
     int tfd_ = -1;
     SessionStatus status = SessionStatus::DISCONNECTED;
-
+    SessionType session_type = SessionType::Public;
 };
 
 struct EpollSlot {

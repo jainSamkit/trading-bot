@@ -4,12 +4,15 @@
 #include <charconv>
 
 class OHLCSession : public Session<OHLCSession, DeltaWebsocketClient> {
+
 public:
+    static constexpr SessionType session_type = SessionType::Public;
     explicit OHLCSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<OHLCSession, DeltaWebsocketClient>(client, sessionID) {}
 
 
     void onMessage(std::string_view msg) {
+        // std::cout<<"[raw msg]: "<<msg<<'\n';
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::OHLC;
 
@@ -26,21 +29,21 @@ public:
             if (field.unescaped_key().get(key)) continue;
             if (key == "candle_start_time") {
                 if (field.value().get_uint64().get((*slot).ohlc.start_time)) return;
-            } else if (key == "close") {
+            } else if (key == "c") {
                 if (field.value().get_double().get((*slot).ohlc.close)) return;
-            } else if(key == "high") {
+            } else if(key == "h") {
                 if (field.value().get_double().get((*slot).ohlc.high)) return;
-            } else if(key == "low") {
+            } else if(key == "l") {
                 if (field.value().get_double().get((*slot).ohlc.low)) return;
-        } else if(key == "open") {
+        } else if(key == "o") {
                 if (field.value().get_double().get((*slot).ohlc.open)) return;
-            } else if(key == "resolution") {
+            } else if(key == "res") {
                 std::string_view res;
                 if (field.value().get_string().get(res)) return;
                 auto it = std::find(ohlc_resolutions.begin(), ohlc_resolutions.end(), res);
                 if (it == ohlc_resolutions.end()) return;
                 (*slot).ohlc.res_idx = static_cast<uint8_t>(it - ohlc_resolutions.begin());
-            } else if (key == "symbol") {
+            } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
                 if (symbol.starts_with("MARK:")) {
@@ -52,9 +55,9 @@ public:
 
                 (*slot).instrument_id = client_.products_.idfromSymbol(symbol);
                 if((*slot).instrument_id == UINT8_MAX) return;
-            } else if (key =="timestamp") {
+            } else if (key =="ts") {
                 if (field.value().get_uint64().get((*slot).ohlc.timestamp)) {};
-            } else if(key == "volume") {
+            } else if(key == "v") {
                 if (field.value().get_double().get((*slot).ohlc.volume)) {};
             } else if(key == "type") {
                 if (field.value().get_string().get(msg_type)) {};

@@ -66,13 +66,8 @@ private:
         if (mid > 0.0)
             std::cout << "  mid " << std::fixed << std::setprecision(prec) << mid
                       << "   spread " << spread << "\n";
-        if (mark.price > 0.0) {
-            std::cout << "  mark " << std::fixed << std::setprecision(prec) << mark.price;
-            if (mark.price_band.lower_limit > 0.0)
-                std::cout << "   band [" << mark.price_band.lower_limit
-                          << ", " << mark.price_band.upper_limit << "]";
-            std::cout << "\n";
-        }
+        if (mark.price > 0.0)
+            std::cout << "  mark " << std::fixed << std::setprecision(prec) << mark.price << "\n";
         if (spot.price > 0.0)
             std::cout << "  spot " << std::fixed << std::setprecision(prec) << spot.price << "\n";
         std::cout << std::string(W_TOTAL, '-') << "\n"

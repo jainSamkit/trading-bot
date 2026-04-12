@@ -78,6 +78,7 @@ add_executable(trading_bot
     src/transport/http_client.cpp
     src/delta_exchange/rest_client.cpp
     src/delta_exchange/ws_client.cpp
+    src/delta_exchange/oms_ws_client.cpp
     src/delta_exchange/api/product.cpp
     src/delta_exchange/api/order.cpp
     src/delta_exchange/api/position.cpp

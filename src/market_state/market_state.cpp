@@ -16,32 +16,32 @@ void MarketState::run(std::atomic<bool>& running) {
 
     while (running.load(std::memory_order_relaxed)) {
         auto msg = ring_ -> pop();
-        if (!msg) {
-            const int64_t now = ms_now_ns();
-            if (now - last_print_ns >= 1'000'000'000LL) {
-                // {resolution name, index in ohlc_resolutions}
-                static constexpr std::pair<const char*, uint8_t> RES[] = {
-                    {"1m",  0},
-                    {"5m",  2},
-                    {"30m", 4},
-                };
-                for (uint8_t i = 0; i < product_group_.instrument_ids.size(); ++i) {
-                    uint8_t instrument_id = product_group_.instrument_ids[i];
-                    printBook(orderbooks_[instrument_id], products_[instrument_id].symbol,
-                              products_[instrument_id].tick_size,
-                              mark_prices_[instrument_id], spot_prices_[instrument_id]);
-                    for (const auto& [name, idx] : RES)
-                        printOHLC(products_[instrument_id].symbol, name,
-                                  candle_store_[0][instrument_id][idx],   // trade
-                                  candle_store_[1][instrument_id][idx]);  // mark
-                }
-                last_print_ns = now;
-            }
-            continue;
-        }
+        // if (!msg) {
+        //     const int64_t now = ms_now_ns();
+        //     if (now - last_print_ns >= 1'000'000'000LL) {
+        //         // {resolution name, index in ohlc_resolutions}
+        //         static constexpr std::pair<const char*, uint8_t> RES[] = {
+        //             {"1m",  0},
+        //             {"5m",  2},
+        //             {"30m", 4},
+        //         };
+        //         for (uint8_t i = 0; i < product_group_.instrument_ids.size(); ++i) {
+        //             uint8_t instrument_id = product_group_.instrument_ids[i];
+        //             printBook(orderbooks_[instrument_id], products_[instrument_id].symbol,
+        //                       products_[instrument_id].tick_size,
+        //                       mark_prices_[instrument_id], spot_prices_[instrument_id]);
+        //             for (const auto& [name, idx] : RES)
+        //                 printOHLC(products_[instrument_id].symbol, name,
+        //                           candle_store_[0][instrument_id][idx],   // trade
+        //                           candle_store_[1][instrument_id][idx]);  // mark
+        //         }
+        //         last_print_ns = now;
+        //     }
+        //     continue;
+        // }
 
-        const int64_t t_consume = ms_now_ns();
-        stats_.record(msg->t_kernel, msg->t_frame, msg->t_parse, t_consume);
+        // const int64_t t_consume = ms_now_ns();
+        // stats_.record(msg->t_kernel, msg->t_frame, msg->t_parse, t_consume);
 
         switch (msg->type) {
             case FeedMessage::Type::L2Feed: {

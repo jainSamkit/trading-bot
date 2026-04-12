@@ -1,4 +1,7 @@
 #pragma once
+#include <chrono>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 // Included from wsclient.hpp after WebSocketClient is fully defined.
 // Do NOT include this file directly — include wsclient.hpp instead.
@@ -6,7 +9,7 @@
 template<typename DerivedSession, typename ClientDerived>
 class Session {
 public:
-    static constexpr uint8_t MAX_RECONNECTS = 10; //max retries per session 
+    static constexpr uint8_t MAX_RECONNECTS = 10; //max retries per session
     static constexpr uint32_t base_wait = 1000; //base milliseconds to wait before retrying
 
     using Status = SessionStatus;
@@ -20,13 +23,64 @@ public:
         return msg.find(R"("heartbeat")") != std::string_view::npos;
     }
 
-    void forward_message(std::string_view m) { 
-        if(isHeartbeat(m)) {
-            arm_timer_ms(ClientDerived::HEARTBEAT_TIMEOUT_MS);
+    bool isAuthResponse(std::string_view msg) {
+        return msg.find(R"("type":"success")") != std::string_view::npos
+            || msg.find(R"("type":"error")")   != std::string_view::npos;
+    }
+
+    bool isAuthSuccess(std::string_view msg) {
+        return msg.find(R"("type":"success")") != std::string_view::npos;
+    }
+
+    void handleAuthResponse(std::string_view msg) {
+        if (isAuthSuccess(msg)) {
+            std::cerr << "[session " << (int)ctx_.id << "] auth success\n";
+            authenticated_ = true;
+            subscribe();
             return;
         }
 
-        derivedSession().onMessage(m); 
+        // Auth failed — format: {"message":"...","type":"error"}
+        simdjson::ondemand::parser& parser = client_.get_parser();
+        auto result = parser.iterate(msg.data(), msg.size(),
+                                     msg.size() + simdjson::SIMDJSON_PADDING);
+        if (result.error()) {
+            std::cerr << "[session " << (int)ctx_.id << "] auth failed (unparseable): " << msg << "\n";
+            return;
+        }
+        auto doc = std::move(result.value());
+
+        std::string_view message;
+        for (auto field : doc.get_object()) {
+            std::string_view key;
+            if (field.unescaped_key().get(key)) continue;
+            if (key == "message") { if(!field.value().get_string().get(message)) return; }
+        }
+        
+        std::cerr << "[session " << (int)ctx_.id << "] auth failed: " << message << "\n";
+    }
+
+    void forward_message(std::string_view m) {
+        if (isHeartbeat(m)) {
+            arm_timer_ms(ClientDerived::HEARTBEAT_TIMEOUT_MS);
+            return;
+        }
+        if constexpr (DerivedSession::session_type == SessionType::Private) {
+            if (!authenticated_) {
+                std::cerr << "[auth raw] " << m << "\n";
+                if (isAuthResponse(m)) {
+                    handleAuthResponse(m);
+                    return;
+                }
+            }
+        }
+        derivedSession().onMessage(m);
+    }
+
+
+    void start() {
+        if constexpr (DerivedSession::session_type == SessionType::Private) {sendAuth();}
+        else {subscribe();}
     }
 
     WSParser parser_;
@@ -67,6 +121,7 @@ public:
         derivedSession().onSubscribe();
     }
 
+
     bool tcp_connect() {
         auto fd = client_.tcp_connect();
         if(!fd) return false;
@@ -102,6 +157,7 @@ public:
 
     void disconnect() {
         std::cerr << "[session " << (int)ctx_.id << "] disconnected\n";
+        authenticated_ = false;
         ctx_.status = Status::DISCONNECTED;
         client_.onsessionDelete(ctx_);
 
@@ -115,7 +171,7 @@ public:
         ts.it_value.tv_nsec = (delay_ms % 1000) * 1000000L;
         ts.it_interval.tv_sec  = 0;   // no repeat
         ts.it_interval.tv_nsec = 0;
-    
+
         if (timerfd_settime(ctx_.tfd_, 0, &ts, nullptr) < 0)
             {perror("timerfd_settime"); return -1;}
         else {
@@ -139,11 +195,16 @@ public:
                     std::cerr << "[session " << (int)ctx_.id << "] reconnect attempt " << (int)(reconnects + 1) << "\n";
                     if (init(false)) {
                         reconnects = 0;
-                        std::cerr << "[session " << (int)ctx_.id << "] reconnected — resubscribing\n";
-                        subscribe();
+                        if constexpr (DerivedSession::session_type == SessionType::Private) {
+                            std::cerr << "[session " << (int)ctx_.id << "] reconnected — authenticating\n";
+                            sendAuth();
+                        } else {
+                            std::cerr << "[session " << (int)ctx_.id << "] reconnected — resubscribing\n";
+                            subscribe();
+                        }
                         return;
                     }
-                    {
+                    else {
                         uint32_t delay_ms = base_wait + (1u << reconnects) * 1000;
                         std::cerr << "[session " << (int)ctx_.id << "] init failed — retrying in " << delay_ms << "ms\n";
                         reconnects += 1;
@@ -160,7 +221,31 @@ public:
     }
 
     void sendAuth() {
-        derivedSession().onAuth();
+        if constexpr (DerivedSession::session_type == SessionType::Private) {
+            using namespace std::chrono;
+            uint64_t ts = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+            std::string ts_str = std::to_string(ts);
+
+            std::string payload = "GET" + ts_str + "/live";
+
+            unsigned char digest[EVP_MAX_MD_SIZE];
+            unsigned int  digest_len = 0;
+            HMAC(EVP_sha256(),
+                 client_.api_secret_.data(), static_cast<int>(client_.api_secret_.size()),
+                 reinterpret_cast<const unsigned char*>(payload.data()), payload.size(),
+                 digest, &digest_len);
+
+            char hex[65];
+            for (unsigned int i = 0; i < digest_len; ++i)
+                snprintf(hex + i * 2, 3, "%02x", digest[i]);
+
+            std::string msg =
+                R"({"type":"auth","payload":{"api-key":")" + client_.api_key_ +
+                R"(","signature":")" + std::string(hex, digest_len * 2) +
+                R"(","timestamp":")" + ts_str + R"("}})";
+
+            client_.ws_send(ctx_.ssl_, msg);
+        }
     }
 
     ~Session() {
@@ -178,6 +263,7 @@ private:
     }
 
     uint8_t reconnects = 0;
+    bool authenticated_ = false;
     EpollSlot socketSlot;
     EpollSlot timerSlot;
 };

@@ -22,12 +22,8 @@ struct L2Update {
 // Named MarkPriceData to avoid shadowing the FeedMessage::Type::MarkPrice enumerator
 // (unscoped enums inject their values into the enclosing class scope).
 struct MarkPriceData {
-    struct PriceBand {
-        double lower_limit = 0.0;
-        double upper_limit = 0.0;
-    };
+
     uint8_t   instrument_id = UINT8_MAX;
-    PriceBand price_band{};
     double    price     = 0.0;
     uint64_t  timestamp = 0;
 };
