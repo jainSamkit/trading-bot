@@ -44,13 +44,15 @@ public:
                 std::string_view v; if (!field.value().get_string().get(v))
                     order.side = (v == "buy") ? OrderSide::Buy : OrderSide::Sell;
             } else if (key == "size") {
-                int64_t v; if (!field.value().get_int64().get(v)) order.size = static_cast<int32_t>(v);
+                uint64_t v; if (!field.value().get_uint64().get(v)) order.size = static_cast<uint32_t>(v);
             } else if (key == "filled_size") {
                 std::string_view v; if (!field.value().get_string().get(v)) order.filled_size = static_cast<uint32_t>(svToDouble(v));
             } else if (key == "unfilled_size") {
                 int64_t v; if (!field.value().get_int64().get(v)) order.unfilled_size = static_cast<uint32_t>(v);
             } else if (key == "limit_price") {
                 std::string_view v; if (!field.value().get_string().get(v)) order.limit_price = svToDouble(v);
+            } else if (key == "stop_price") {
+                    std::string_view v; if (!field.value().get_string().get(v)) order.stop_price = svToDouble(v);
             } else if (key == "average_fill_price") {
                 std::string_view v; if (!field.value().get_string().get(v)) order.average_fill_price = svToDouble(v);
             } else if (key == "paid_commission") {
@@ -61,6 +63,17 @@ public:
                     else if (v == "closed")    order.state = OrderState::Closed;
                     else if (v == "cancelled") order.state = OrderState::Cancelled;
                     else if (v == "pending")   order.state = OrderState::Pending;
+                }
+            } else if (key == "stop_order_type") {
+                std::string_view v; if (!field.value().get_string().get(v)) {
+                    if      (v == "take_profit_order")      order.stop_order_type = StopOrderType::TP;
+                    else if (v == "stop_loss_order")        order.stop_order_type = StopOrderType::SL;
+                }
+            } else if (key == "stop_trigger_method") {
+                std::string_view v; if (!field.value().get_string().get(v)) {
+                    if      (v == "mark_price")             order.stop_trigger_method = StopOrderType::Mark;
+                    else if (v == "last_traded_price")        order.stop_trigger_method = StopOrderType::LTP;
+                    else if (v == "spot_price")        order.stop_trigger_method = StopOrderType::Spot;
                 }
             } else if (key == "order_type") {
                 std::string_view v; if (!field.value().get_string().get(v))
@@ -97,6 +110,7 @@ public:
             } else if (key == "reason") {
                 std::string_view v; if (!field.value().get_string().get(v)) {
                     if      (v == "fill")         order.reason = OrderReason::Fill;
+                    else if (v == "stop_create")  order.reason = OrderReason::StopCreate;
                     else if (v == "stop_update")  order.reason = OrderReason::StopUpdate;
                     else if (v == "stop_trigger") order.reason = OrderReason::StopTrigger;
                     else if (v == "stop_cancel")  order.reason = OrderReason::StopCancel;
@@ -227,7 +241,12 @@ public:
             reconnect();
             return;  // no commit — slot abandoned
         }
+
         orderSeq_[slot->order.instrument_id] = seq_no;
+        if(slot -> order.state  == OrderState::Pending || (slot -> action == OMSAction::Delete && (slot -> order.reason == OrderReason::StopCancel || slot -> order.reason == OrderReason::StopTrigger))) {
+            slot->type = OMSEventType::StopOrder;
+        }
+
         printOrder(*slot);
         client_.commit_to_ring();
     }

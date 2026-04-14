@@ -13,15 +13,18 @@ template<typename T, size_t N>
 class SpscRing {
     static_assert ((N & (N-1)) == 0, "N must be power of 2");
 
-    public: 
-        std::optional<T> pop() {
+    public:
+    
+        T* pop_begin() {
             uint64_t tail = ring_.tail_.load(std::memory_order_relaxed);
             uint64_t head = ring_.head_.load(std::memory_order_acquire);
+            if(head == tail) return nullptr;
 
-            if(head == tail) return std::nullopt;
-            T val = buffer_[tail & (N-1)];
+            return static_cast<T*>(&buffer_[tail & (N-1)]);
+        }
+
+        void pop_commit() {
             ring_.tail_.fetch_add(1, std::memory_order_release);
-            return val;
         }
 
         T* push_begin() {

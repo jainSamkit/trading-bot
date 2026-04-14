@@ -11,7 +11,7 @@ requires std::derived_from(ClientT, TcpClient)
 class ConnectionPool {
 
     template<typename... Args>
-    explicit ConnectionPool(Args&& args) {
+    explicit ConnectionPool(Args&&... args) {
         for (auto& slot: slots_) {
             slot.client_ = std::make_unique<ClientT>(std::forward<Args>(args)...);
         }
@@ -29,10 +29,9 @@ class ConnectionPool {
             auto& slot = slots_[(start + i) % N ];
             if(slot.healthy) return *(slot.client);
         }
-
+        
         slots_[0].healthy = slots_[0].client_->connect();
         if(slots_[0].healthy) return *slots_[0].client_;
-
         throw std::runtime_error("connection pool exhausted");
     }
 

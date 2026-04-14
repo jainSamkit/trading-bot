@@ -15,7 +15,7 @@ void MarketState::run(std::atomic<bool>& running) {
     int64_t last_print_ns = ms_now_ns();
 
     while (running.load(std::memory_order_relaxed)) {
-        auto msg = ring_ -> pop();
+        auto* msg = ring_->pop_begin();
         // if (!msg) {
         //     const int64_t now = ms_now_ns();
         //     if (now - last_print_ns >= 1'000'000'000LL) {
@@ -42,6 +42,8 @@ void MarketState::run(std::atomic<bool>& running) {
 
         // const int64_t t_consume = ms_now_ns();
         // stats_.record(msg->t_kernel, msg->t_frame, msg->t_parse, t_consume);
+
+        if(!msg) continue;
 
         switch (msg->type) {
             case FeedMessage::Type::L2Feed: {
@@ -81,6 +83,7 @@ void MarketState::run(std::atomic<bool>& running) {
             default:
                 break;
         }
+        ring_->pop_commit();
     }
 }
 
