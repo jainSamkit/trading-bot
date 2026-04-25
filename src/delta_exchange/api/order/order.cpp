@@ -55,9 +55,10 @@ CreateOrderRequest CreateOrderRequest::from_intent(const CreateOrderIntent& inte
     req.order_type    = (intent.type == ExecutionOrderType::Limit) ? OrderType::Limit : OrderType::Market;
     req.post_only     = intent.post_only;
     req.reduce_only   = intent.reduce_only;
-    req.time_in_force = TimeInForce::GTC;
-    req.limit_price   = intent.price;
-    req.tick_size     = intent.tick_size;
+    req.time_in_force   = TimeInForce::GTC;
+    req.limit_price     = intent.price;
+    req.tick_size       = intent.tick_size;
+    req.client_order_id = intent.client_order_id;
 
     if (intent.is_stop_order) {
         req.stop_order_type = (intent.stop_order_type == ExecutionStopOrderType::TP)
@@ -85,9 +86,8 @@ std::string CreateOrderRequest::serialize() const {
     body += "\",\"product_id\":";    body += std::to_string(product_id);
     body += ",\"size\":";            body += std::to_string(size);
     body += ",\"time_in_force\":\""; body += tif_str(time_in_force);
-    body += "\",\"post_only\":\"";   body += post_only   ? "true" : "false";
-    body += "\",\"reduce_only\":\""; body += reduce_only ? "true" : "false";
-    body += "\"";
+    body += "\",\"post_only\":";     body += post_only   ? "true" : "false";
+    body += ",\"reduce_only\":";     body += reduce_only ? "true" : "false";
 
     if (order_type == OrderType::Limit) {
         body += ",\"limit_price\":\""; body += double_to_str(limit_price, tick_decimals(tick_size)); body += "\"";
@@ -218,26 +218,10 @@ bool CancelAllOrderRequest::parse_success(std::string_view json) {
     return success;
 }
 
-// ─── deserialize ─────────────────────────────────────────────────────────────
+// ─── shared field parser ──────────────────────────────────────────────────────
 
-bool CreateOrderRequest::deserialize(std::string_view json, OMSEvent& out, const ProductTable& products) {
-    simdjson::ondemand::parser parser;
-    auto result = parser.iterate(json.data(), json.size(), json.size() + simdjson::SIMDJSON_PADDING);
-    if (result.error()) return false;
-    auto doc = std::move(result.value());
-
-    bool success = false;
-    if (doc["success"].get_bool().get(success) || !success) return false;
-
-    simdjson::ondemand::object res_obj;
-    if (doc["result"].get_object().get(res_obj)) return false;
-
-    out        = {};
-    out.source = OMSEventSource::Rest;
-    out.action = OMSAction::Create;
-    Order& o   = out.order;
-
-    for (auto field : res_obj) {
+static void parse_order_fields(simdjson::ondemand::object& obj, Order& o, const ProductTable& products) {
+    for (auto field : obj) {
         std::string_view key;
         if (field.unescaped_key().get(key)) continue;
 
@@ -324,10 +308,91 @@ bool CreateOrderRequest::deserialize(std::string_view json, OMSEvent& out, const
     }
 
     o.filled_size = o.size - o.unfilled_size;
+}
 
-    // pending state means the order is waiting to be triggered — it's a stop order
-    out.type = (o.state == OrderState::Pending || o.stop_order_type != StopOrderType::None)
-               ? OMSEventType::StopOrder : OMSEventType::Order;
+static OMSEventType order_event_type(const Order& o) {
+    return (o.state == OrderState::Pending || o.stop_order_type != StopOrderType::None)
+           ? OMSEventType::StopOrder : OMSEventType::Order;
+}
+
+// ─── deserialize ─────────────────────────────────────────────────────────────
+
+bool CreateOrderRequest::deserialize(std::string_view json, OMSEvent& out, const ProductTable& products) {
+    simdjson::ondemand::parser parser;
+    auto result = parser.iterate(json.data(), json.size(), json.size() + simdjson::SIMDJSON_PADDING);
+    if (result.error()) return false;
+    auto doc = std::move(result.value());
+
+    bool success = false;
+    if (doc["success"].get_bool().get(success) || !success) return false;
+
+    simdjson::ondemand::object res_obj;
+    if (doc["result"].get_object().get(res_obj)) return false;
+
+    out        = {};
+    out.source = OMSEventSource::Rest;
+    out.action = OMSAction::Create;
+
+    parse_order_fields(res_obj, out.order, products);
+    out.type = order_event_type(out.order);
 
     return true;
+}
+
+// ─── GetOpenOrdersRequest ─────────────────────────────────────────────────────
+
+std::string GetOpenOrdersRequest::query() const {
+    std::string q;
+    q.reserve(64);
+    q += "states=";    q += states;
+    q += "&page_num="; q += std::to_string(page_num);
+    q += "&page_size=";q += std::to_string(page_size);
+    return q;
+}
+
+int GetOpenOrdersRequest::deserialize_page(std::string_view json,
+                                           OMSEvent* out_events,
+                                           int max_events,
+                                           bool& has_more,
+                                           int page_num,
+                                           int page_size,
+                                           const ProductTable& products) {
+    simdjson::ondemand::parser parser;
+    auto result = parser.iterate(json.data(), json.size(), json.size() + simdjson::SIMDJSON_PADDING);
+    if (result.error()) return 0;
+    auto doc = std::move(result.value());
+
+    bool success = false;
+    if (doc["success"].get_bool().get(success) || !success) return 0;
+
+    int64_t total_count = 0;
+    simdjson::ondemand::object meta;
+    if (!doc["meta"].get_object().get(meta)) {
+        for (auto field : meta) {
+            std::string_view key;
+            if (field.unescaped_key().get(key)) continue;
+            if (key == "total_count") { int64_t v; if (!field.value().get_int64().get(v)) total_count = v; }
+        }
+    }
+    has_more = (total_count > static_cast<int64_t>(page_num) * page_size);
+
+    simdjson::ondemand::array arr;
+    if (doc["result"].get_array().get(arr)) return 0;
+
+    int count = 0;
+    for (auto element : arr) {
+        if (count >= max_events) break;
+        simdjson::ondemand::object obj;
+        if (element.get_object().get(obj)) continue;
+
+        OMSEvent& ev = out_events[count++];
+        ev        = {};
+        ev.source = OMSEventSource::Reconcile;
+        ev.action = OMSAction::Create;
+
+        parse_order_fields(obj, ev.order, products);
+        ev.type = order_event_type(ev.order);
+    }
+
+    return count;
 }

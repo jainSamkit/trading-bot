@@ -1,4 +1,4 @@
-#include "delta_exchange/api/product.hpp"
+#include "delta_exchange/api/product/product.hpp"
 #include <simdjson.h>
 #include <cstring>
 #include <stdexcept>

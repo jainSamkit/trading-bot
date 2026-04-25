@@ -23,9 +23,12 @@ public:
     void push_signal(OMSSignal sig) {
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;
+        *slot = {};
+        
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
+
         client_.commit_to_ring();
     }
 
@@ -100,6 +103,8 @@ public:
     }
 
     void onMessage(std::string_view msg) {
+
+        // std::cout<<"[wallet raw msg]: "<<msg<<'\n';
         if (msg.find(R"("subscriptions")") != std::string_view::npos) return;
 
         // First message after subscribe — channel is now live, signal valid
@@ -116,6 +121,7 @@ public:
 
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;
+        *slot = {};
         slot->type   = OMSEventType::Wallet;
         slot->source = OMSEventSource::Websocket;
         slot->action = OMSAction::Update;
@@ -136,7 +142,7 @@ public:
             + channel_
             + R"(","symbols":["all"]}]}})";
 
-        std::cout << msg << "\n";
+        // std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaOMSWebsocketClient::HEARTBEAT_TIMEOUT_MS);

@@ -21,21 +21,16 @@ class Reconciler {
     void reconcile() {
         orders_state_valid = (order_state_manager_ -> get_orders_state) == ChannelState::Valid;
         positions_state_valid = (order_state_manager_ -> get_positions_state) == ChannelState::Valid;
-
-        if(orders_state_valid) reconcile_orders(OMSEventSource::Reconcile, reconcile_ring_);
-        if(positions_state_valid) reconcile_positions(OMSEventSource::Reconcile, reconcile_ring_);
-        if(orders_state_valid && positions_state_valid) reconcile_wallet(OMSEventSource::Reconcile, reconcile_ring_);
-    }
-
-    void reconcile_orders() {
-        auto& oms_events = client_.get_open_orders();
-
+        
+        if(orders_state_valid) rest_client_.reconcile_open_orders(reconcile_ring_);
+        if(positions_state_valid) rest_client_.reconcile_positions(reconcile_ring_);
+        if(orders_state_valid && positions_state_valid) rest_client_.reconcile_wallet(reconcile_ring_);
     }
 
 
     private:
         const OrderStateManager* order_state_manager_;
-        const RestClient client_;
+        const RestClient rest_client_;
         const ProductTable& products_;
         SpscRing<OMSEvent, 256>* reconcile_ring_;
 }

@@ -1,9 +1,11 @@
 #pragma once
 #include "core/spsc_ring.hpp"
 #include "delta_exchange/oms_ws_client.hpp"
+#include "delta_exchange/rest_client.hpp"
 #include "delta_exchange/sessions/types.hpp"
-#include "ipc/shared_state.hpp"
 #include "delta_exchange/models/product.hpp"
+#include "oms/oms_manager.hpp"
+#include "ipc/shared_state.hpp"
 #include <atomic>
 #include <csignal>
 #include <concepts>
@@ -23,11 +25,25 @@ struct OMSConfig {
 template<typename T>
 concept IsOMSWebSocketClient = std::derived_from<T, WebSocketClient<T>>;
 
-template<IsOMSWebSocketClient Client>
-class OmsProcess {
+template<typename U>
+concept IsRestClient = std::derived_from<U, TcpClient>;
 
+template<IsOMSWebSocketClient WSClient, IsRestClient RestClient = DeltaRestClient>
+class OmsProcess {
 public:
-    OmsProcess(const ProductTable& products, const OMSConfig& cfg): products_(products), cfg_(cfg) {}
+OmsProcess(const ProductTable& products, const OMSConfig& cfg)
+        : products_(products), cfg_(cfg)
+    {
+        oms_rest_ring_         = std::make_unique<SpscRing<OMSEvent, 256>>();
+        oms_ws_ring_           = std::make_unique<SpscRing<OMSEvent, 256>>();
+        oms_reconcile_ring_    = std::make_unique<SpscRing<OMSEvent, 256>>();
+        ws_client_             = std::make_unique<WSClient>(
+            cfg_.host.c_str(), cfg_.port, cfg_.path.c_str(),
+            cfg_.api_key.c_str(), cfg_.api_secret.c_str(),
+            products_, oms_ws_ring_.get());
+        oms_manager_           = std::make_unique<OrderStateManager>(
+            oms_ws_ring_.get(), oms_rest_ring_.get(), oms_reconcile_ring_.get(), products_);
+    }
 
     void start() {
         instance_for_shutdown_signal_ = this;
@@ -37,46 +53,49 @@ public:
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
 
-        feedRing_ = std::make_unique<SpscRing<FeedMessage, 4096>>();
-        client_   = std::make_unique<Client>(cfg_.host.c_str(), cfg_.port,
-                                                cfg_.path.c_str(), cfg_.api_key.c_str(), 
-                                                cfg_.api_secret.c_str(), products_,
-                                                feedRing_.get());
+        running_.store(true, std::memory_order_relaxed);
 
-        // market_   = std::make_unique<MarketState>(feedRing_.get(), products_, product_group_);
-        // market_thread_ = std::thread(&MarketState::run, market_.get(), std::ref(running_));
-        client_->start();
+        oms_manager_thread_   = std::thread(&OrderStateManager::run, oms_manager_.get(), std::ref(running_));
+        oms_ws_client_thread_ = std::thread(&WSClient::start, ws_client_.get());
+
+        oms_manager_thread_.join();
+        oms_ws_client_thread_.join();
     }
 
     void stop() {
         if (stopped_.exchange(true)) return;
-        // running_.store(false, std::memory_order_relaxed);
-        if (client_) client_->shutdown();
-        // if (market_thread_.joinable()) market_thread_.join();
+        running_.store(false, std::memory_order_relaxed);
+        ws_client_->shutdown();
+        if (oms_manager_thread_.joinable())   oms_manager_thread_.join();
+        if (oms_ws_client_thread_.joinable()) oms_ws_client_thread_.join();
     }
+
+    OrderStateManager& oms_manager() { return *oms_manager_; }
 
     ~OmsProcess() { stop(); }
 
 private:
-
     static void sig_interrupt(int sig) {
         (void)sig;
-        // Terminal Ctrl+C often delivers SIGINT to every process in the foreground
-        // group, and the parent may also send SIGTERM — handler can run more than once.
-        if (shutdown_signal_seen_ != 0)
-            return;
+        if (shutdown_signal_seen_ != 0) return;
         shutdown_signal_seen_ = 1;
         if (instance_for_shutdown_signal_)
             instance_for_shutdown_signal_->stop();
     }
 
-    inline static volatile sig_atomic_t             shutdown_signal_seen_ = 0;
-    inline static OmsProcess*                       instance_for_shutdown_signal_ = nullptr;
-    const ProductTable&                             products_;
-    const OMSConfig&                                cfg_;
-    std::atomic<bool>                               running_{true};
-    std::atomic<bool>                               stopped_{false};
+    inline static volatile sig_atomic_t shutdown_signal_seen_ = 0;
+    inline static OmsProcess*           instance_for_shutdown_signal_ = nullptr;
 
-    std::unique_ptr<SpscRing<FeedMessage, 4096>>    feedRing_;
-    std::unique_ptr<Client>                         client_;
+    const ProductTable& products_;
+    const OMSConfig     cfg_;
+    std::atomic<bool>   running_{false};
+    std::atomic<bool>   stopped_{false};
+
+    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_ws_ring_;
+    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_rest_ring_;
+    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_reconcile_ring_;
+    std::unique_ptr<WSClient>                 ws_client_;
+    std::unique_ptr<OrderStateManager>        oms_manager_;
+    std::thread                               oms_manager_thread_;
+    std::thread                               oms_ws_client_thread_;
 };

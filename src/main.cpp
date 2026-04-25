@@ -1,4 +1,4 @@
-#include "delta_exchange/api/product.hpp"
+#include "delta_exchange/api/product/product.hpp"
 #include "market_state/market_state.hpp"
 #include "processes/feed.hpp"
 #include "processes/oms.hpp"
@@ -13,6 +13,13 @@
 #include <thread>
 #include <vector>
 
+
+static constexpr const char* PROD_REST_HOST     = "api.india.delta.exchange";
+static constexpr const char* TESTNET_REST_HOST  = "cdn-ind.testnet.deltaex.org";
+static constexpr const char* TESTNET_WS_HOST    = "socket-ind.testnet.deltaex.org";
+static constexpr const char* TESTNET_API_KEY    = "JiV80pv3OJKlUyisMN2x4BHqnKONW5";
+static constexpr const char* TESTNET_API_SECRET = "ELUujrDwVJrK5UiJBkQyBKTJNdVvOOy8OKUuEsjxaeeLWXai6emZYsCFtt40";
+static constexpr const char* TEST_SYMBOL        = "SOLUSD";
 
 
 // Signal handlers only receive int sig — store PIDs in process-global state.
@@ -50,12 +57,11 @@ static void print_product(const Product& p) {
 
 int main(int argc, char** argv)
 {
-    std::vector<std::string> allowed_products {"BTCUSD", "ETHUSD", "SOLUSD"};
-    DeltaRestClient rest("api.india.delta.exchange", "", "");
-    rest.connect();
-
     ProductTable products;
-
+    std::vector<std::string> allowed_products {"BTCUSD", "ETHUSD", "SOLUSD"};
+    DeltaRestClient rest("api.india.delta.exchange", "", "", products);
+    rest.connect();
+    
     for (const std::string& sym : allowed_products) {
         try {
             products.add(fetch_product(rest, sym));
@@ -101,7 +107,7 @@ int main(int argc, char** argv)
     //     .api_secret = "sk2zVY2nNAUTDZwmrzH449KCNRCUmWafVvvrVdraTN5js8wvGYuAMy0rsw8C"
     // };
 
-    OmsProcess<DeltaOMSWebsocketClient> oms_delta {products, oms_cfg_};
+    OmsProcess<DeltaOMSWebsocketClient, DeltaRestClient> oms_delta {products, oms_cfg_};
     std::vector<FeedProcess<DeltaWebsocketClient>*> feeds;
 
     // feeds.push_back(&btc_feed);

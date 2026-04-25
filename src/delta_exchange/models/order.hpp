@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 
 enum class OrderSide                : uint8_t { Buy, Sell };
 enum class OrderType                : uint8_t { Limit, Market };
@@ -12,6 +13,8 @@ enum class OrderReason              : uint8_t { None, Fill, StopCreate, StopUpda
 
 // WS order channel update — no heap strings on hot fields
 struct Order {
+
+
     uint64_t      id                = 0;
     uint32_t      product_id        = 0;
     uint8_t       instrument_id     = UINT8_MAX; // index into ProductTable
@@ -42,3 +45,6 @@ struct Order {
 
     uint64_t      timestamp         = 0;         // Unix microseconds; WS: event timestamp from Delta; REST: local system_clock just before request was sent
 };
+
+
+static_assert(std::is_trivially_copyable_v<Order>, "Order must be trivially copyable");

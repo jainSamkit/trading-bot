@@ -6,6 +6,7 @@
 #include <charconv>
 #include <cstring>
 #include <iostream>
+#include "core/logger.hpp"
 
 class OrderSession : public Session<OrderSession, DeltaOMSWebsocketClient> {
 public:
@@ -71,9 +72,9 @@ public:
                 }
             } else if (key == "stop_trigger_method") {
                 std::string_view v; if (!field.value().get_string().get(v)) {
-                    if      (v == "mark_price")             order.stop_trigger_method = StopOrderType::Mark;
-                    else if (v == "last_traded_price")        order.stop_trigger_method = StopOrderType::LTP;
-                    else if (v == "spot_price")        order.stop_trigger_method = StopOrderType::Spot;
+                    if      (v == "mark_price")             order.stop_trigger_method = StopTriggerMethod::Mark;
+                    else if (v == "last_traded_price")        order.stop_trigger_method = StopTriggerMethod::LTP;
+                    else if (v == "spot_price")        order.stop_trigger_method = StopTriggerMethod::Spot;
                 }
             } else if (key == "order_type") {
                 std::string_view v; if (!field.value().get_string().get(v))
@@ -126,7 +127,10 @@ public:
         const char* action_str = event.action == OMSAction::Create ? "create"
                                : event.action == OMSAction::Update ? "update" : "delete";
         const char* state_str  = order.state == OrderState::Open      ? "open"
-                               : order.state == OrderState::Closed    ? "closed" : "cancelled";
+                               : order.state == OrderState::Closed    ? "closed"
+                               : order.state == OrderState::Cancelled    ? "cancelled"
+                               : order.state == OrderState::Pending    ? "pending" : "unknown";
+
         const char* side_str   = order.side == OrderSide::Buy ? "buy" : "sell";
         const char* reason_str = order.reason == OrderReason::Fill         ? "fill"
                                : order.reason == OrderReason::StopUpdate  ? "stop_update"
@@ -154,6 +158,8 @@ public:
     void push_signal(OMSSignal sig) {
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;
+        
+        *slot = {};
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
@@ -161,6 +167,7 @@ public:
     }
 
     void onMessage(std::string_view msg) {
+        // std::cout<<"[order raw msg]: "<<msg<<'\n';
         if (msg.find(R"("subscriptions")") != std::string_view::npos) return;
 
         simdjson::ondemand::parser& parser = client_.get_parser();
@@ -197,13 +204,20 @@ public:
                         if (elem.get_object().get(obj)) continue;
                         OMSEvent* slot = client_.get_ring_slot();
                         if (!slot) continue;  // ring full — drop
+                        *slot = {};
                         slot->type   = OMSEventType::Order;
                         slot->source = OMSEventSource::Websocket;
                         slot->action = OMSAction::Create;  // forced: snapshot = existing open orders
                         uint64_t unused_seq = 0;
                         parseOrder(obj, *slot, unused_seq);
+                        if(slot->order.client_order_id == 0) slot->order.client_order_id = slot->order.id;
                         slot->order.timestamp = snap_ts;
                         snap_instrument_id = slot->order.instrument_id;  // all entries same symbol
+
+                        if(slot -> order.state  == OrderState::Pending) {
+                            slot->type = OMSEventType::StopOrder;
+                        }
+                        
                         printOrder(*slot);
                         client_.commit_to_ring();
                     }
@@ -214,18 +228,19 @@ public:
             if (snap_instrument_id != UINT8_MAX)
                 orderSeq_[snap_instrument_id] = snap_seq;
 
+            if (in_snapshot_) {
+                in_snapshot_ = false;
+                push_signal(OMSSignal::OrdersSnapshotComplete);
+            }
+
             return;
         }
 
-        // First non-snapshot message — snapshot phase is over
-        if (in_snapshot_) {
-            in_snapshot_ = false;
-            push_signal(OMSSignal::OrdersSnapshotComplete);
-        }
-
+        if(in_snapshot_) return;
         // CRUD update — single order, all fields at top level including seq_no.
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;  // ring full — drop
+        *slot = {};
         slot->type   = OMSEventType::Order;
         slot->source = OMSEventSource::Websocket;
         slot->order  = {};
@@ -235,9 +250,10 @@ public:
         uint64_t seq_no = 0;
         parseOrder(obj, *slot, seq_no);
 
-        if (seq_no != orderSeq_[slot->order.instrument_id] + 1) {
+        if (orderSeq_[slot->order.instrument_id] !=0 && seq_no != orderSeq_[slot->order.instrument_id] + 1) {
             orderSeq_.fill(0);
             push_signal(OMSSignal::OrdersInvalid);
+            in_snapshot_ = true;
             reconnect();
             return;  // no commit — slot abandoned
         }
@@ -247,21 +263,24 @@ public:
             slot->type = OMSEventType::StopOrder;
         }
 
+        if(slot->order.client_order_id == 0) slot->order.client_order_id = slot->order.id;
+
         printOrder(*slot);
         client_.commit_to_ring();
     }
 
     void onSubscribe() {
-        in_snapshot_ = true;
+
         orderSeq_.fill(0);
         push_signal(OMSSignal::OrdersInvalid);
+        in_snapshot_ = true;
 
         std::string msg =
             R"({"type":"subscribe","payload":{"channels":[{"name":")"
             + channel_
             + R"(","symbols":["all"]}]}})";
 
-        std::cout << msg << "\n";
+        // std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaOMSWebsocketClient::HEARTBEAT_TIMEOUT_MS);

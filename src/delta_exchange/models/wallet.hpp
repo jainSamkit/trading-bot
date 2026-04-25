@@ -3,6 +3,7 @@
 #include <cstring>
 
 struct Wallet {
+
     uint64_t    id                          = 0;
     char        asset_symbol[16]            = {};   // e.g. "USD", "BTC"
 

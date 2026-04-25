@@ -27,8 +27,7 @@ httplib::Result TcpClient::put(const std::string& path,
 }
 
 httplib::Result TcpClient::del(const std::string& path,
-                                const std::string& query,
+                                const std::string& body,
                                 const httplib::Headers& headers) {
-    std::string full = query.empty() ? path : path + "?" + query;
-    return client_->Delete(full, headers);
+    return client_->Delete(path, headers, body, "application/json");
 }

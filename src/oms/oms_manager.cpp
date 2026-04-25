@@ -1,14 +1,84 @@
 #include "oms/oms_manager.hpp"
+#include "oms/oms_audit.hpp"
+#include <cassert>
+#include <cstdarg>
+#include <chrono>
+#include <ctime>
+#include <iostream>
+#include <thread>
+// ─── lifecycle ────────────────────────────────────────────────────────────────
 
 OrderStateManager::OrderStateManager(
     SpscRing<OMSEvent, 256>* const oms_ws_ring,
     SpscRing<OMSEvent, 256>* const oms_rest_ring,
     SpscRing<OMSEvent, 256>* const oms_reconcile_ring,
-    const ProductTable& products)
-    : oms_ws_ring_(oms_ws_ring)
+    const ProductTable& products,
+    const char* audit_path)
+    : products_(products)
+    , oms_ws_ring_(oms_ws_ring)
     , oms_rest_ring_(oms_rest_ring)
     , oms_reconcile_ring_(oms_reconcile_ring)
-    , products_(products) {}
+{
+    if (audit_path) {
+        audit_ = fopen(audit_path, "w");   // "w" truncates each run; change to "a" to accumulate
+        if (!audit_)
+            fprintf(stderr, "[oms] WARNING: could not open audit log '%s'\n", audit_path);
+    }
+}
+
+OrderStateManager::~OrderStateManager() {
+    if (audit_) { fflush(audit_); fclose(audit_); }
+}
+
+// ─── audit helper ─────────────────────────────────────────────────────────────
+
+void OrderStateManager::audit(const char* fmt, ...) {
+    if (!audit_) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm t;
+    localtime_r(&ts.tv_sec, &t);
+    fprintf(audit_, "[%02d:%02d:%02d.%03ld] [oms] ",
+            t.tm_hour, t.tm_min, t.tm_sec, ts.tv_nsec / 1'000'000L);
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(audit_, fmt, ap);
+    va_end(ap);
+    fputc('\n', audit_);
+    fflush(audit_);
+}
+
+// ─── ring drains ──────────────────────────────────────────────────────────────
+
+// Previous implementation (replaced by dispatch_event):
+
+void OrderStateManager::drain_ws_ring() {
+
+    while (auto* oms_event = oms_ws_ring_->pop_begin()) {
+        // fprintf(stderr, "drain_ws_ring: ev=%p type=%u\n", (void*)oms_event, (unsigned)(uint8_t)oms_event->type);
+        const auto type_index = static_cast<size_t>(oms_event->type);
+        (this->*kHandlers[type_index])(*oms_event);
+
+        oms_ws_ring_->pop_commit();
+    }
+}
+
+void OrderStateManager::drain_rest_ring() {
+    while (auto* oms_event = oms_rest_ring_->pop_begin()) {
+        const auto type_index = static_cast<size_t>(oms_event->type);
+        (this->*kHandlers[type_index])(*oms_event);
+        oms_rest_ring_->pop_commit();
+    }
+}
+
+void OrderStateManager::drain_reconcile_ring() {
+    while (auto* oms_event = oms_reconcile_ring_->pop_begin()) {
+
+        const auto type_index = static_cast<size_t>(oms_event->type);
+        (this->*kHandlers[type_index])(*oms_event);
+        oms_reconcile_ring_->pop_commit();
+    }
+}
 
 void OrderStateManager::run(std::atomic<bool>& running) {
     while (running.load(std::memory_order_relaxed)) {
@@ -18,72 +88,12 @@ void OrderStateManager::run(std::atomic<bool>& running) {
     }
 }
 
-void OrderStateManager::drain_ws_ring() {
-    while (auto* oms_event = oms_ws_ring_->pop_begin()) {
-        auto handler = kHandlers[oms_event -> type];
-        (this.*handler)(*oms_event);
-        oms_ws_ring_->pop_commit();
-    }
-}
-
-void OrderStateManager::drain_rest_ring() {
-    while (auto* oms_event = oms_rest_ring_->pop_begin()) {
-        auto handler = kHandlers[oms_event -> type];
-        (this.*handler)(*oms_event);
-        oms_rest_ring_->pop_commit();
-    }
-}
-
-void OrderStateManager::drain_reconcile_ring() {
-    while (auto* oms_event = oms_reconcile_ring_->pop_begin()) {
-
-        auto handler = kHandlers[oms_event -> type];
-        (this.*handler)(*oms_event);
-        oms_reconcile_ring_->pop_commit();
-    }
-}
-
-void OrderStateManager::handle_signal(const OMSEvent& event) {
-    assert(event.source == OMSEventSource::Websocket);
-
-    switch (event.signal) {
-        case OMSSignal::OrdersInvalid:
-            mark_orders_invalid();
-            break;
-
-        case OMSSignal::OrdersSnapshotComplete:
-            
-            state_.orders_state_.store(ChannelState::Valid, std::memory_order_release);
-            break;
-
-        case OMSSignal::PositionsInvalid:
-            mark_positions_invalid();
-            break;
-
-        case OMSSignal::PositionsSnapshotComplete:
-            // state_.positions_state_ = ChannelState::Valid;
-            state_.positions_state_.store(ChannelState::Valid, std::memory_order_release);
-            break;
-
-        case OMSSignal::WalletInvalid:
-            mark_wallet_invalid();
-            break;
-
-        case OMSSignal::WalletSnapshotComplete:
-            state_.wallet_state_.store(ChannelState::Valid, std::memory_order_release);
-            // state_.wallet_state_ = ChannelState::Valid;
-            break;
-    }
-}
+// ─── insert helpers (unchanged) ───────────────────────────────────────────────
 
 static Order* alloc_order_slot(OMSState& state, const OMSEvent& event) {
     return (event.order.side == OrderSide::Buy)
         ? state.bids_[event.order.instrument_id].allocate()
         : state.asks_[event.order.instrument_id].allocate();
-}
-
-static Order* alloc_stop_order_slot(OMSState& state, const OMSEvent& event) {
-    return state.stop_orders_[event.order.instrument_id].allocate();
 }
 
 static void insert_order(OMSState& state, const OMSEvent& event) {
@@ -93,195 +103,149 @@ static void insert_order(OMSState& state, const OMSEvent& event) {
     state.client_id_order_map[event.order.client_order_id] = slot;
 }
 
-
 static void insert_stop_order(OMSState& state, const OMSEvent& event) {
-    Order* slot = alloc_stop_order_slot(state, event);
+    Order* slot = state.stop_orders_[event.order.instrument_id].allocate();
     *slot = event.order;
     state.exchange_id_stop_order_map[event.order.id]            = slot;
     state.client_id_stop_order_map[event.order.client_order_id] = slot;
 }
 
-void OrderStateManager::handle_stop_order(const OMSEvent& event) {
-    switch (event.source) {
+// ─── delete helpers ───────────────────────────────────────────────────────────
+// Both use exchange_id as the primary lookup key — always unique, unlike
+// client_order_id which is 0 for system-generated orders (e.g. close_all).
+// The client map erase is guarded with a pointer check so a later order that
+// overwrote client_id_order_map[0] is not accidentally removed.
 
-        case OMSEventSource::Websocket: {
-            if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Invalid)
-                // state_.orders_state_ = ChannelState::Rebuilding;
-                state_.orders_state_.store(ChannelState::Rebuilding, std::memory_order_release);
+static void erase_order(OMSState& state, uint64_t exchange_id) {
+    auto it = state.exchange_id_order_map.find(exchange_id);
+    if (it == state.exchange_id_order_map.end()) return;
+    Order* slot = it->second;
+    if (slot->side == OrderSide::Buy)
+        state.bids_[slot->instrument_id].deallocate(slot);
+    else
+        state.asks_[slot->instrument_id].deallocate(slot);
+    state.exchange_id_order_map.erase(it);
+    auto cit = state.client_id_order_map.find(slot->client_order_id);
+    if (cit != state.client_id_order_map.end()) state.client_id_order_map.erase(cit);
+}
 
-            if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding) {
-                // snapshot in progress — insert all incoming orders
-                insert_stop_order(state_, event);
-                break;
-            }
+static void erase_stop_order(OMSState& state, uint64_t exchange_id) {
+    auto it = state.exchange_id_stop_order_map.find(exchange_id);
+    if (it == state.exchange_id_stop_order_map.end()) return;
+    Order* slot = it->second;
+    state.stop_orders_[slot->instrument_id].deallocate(slot);
+    state.exchange_id_stop_order_map.erase(it);
+    auto cit = state.client_id_stop_order_map.find(slot->client_order_id);
+    if (cit != state.client_id_stop_order_map.end()) state.client_id_stop_order_map.erase(cit);
+}
 
-            // Valid path
-            switch (event.action) {
-                case OMSAction::Create: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        // order exists — REST arrived first, update only if WS is newer
-                        Order* slot = it->second;
-                        if (slot->timestamp >= event.order.timestamp) break;
-                        *slot = event.order;
-                    } else {
-                        insert_stop_order(state_, event);
-                    }
-                    break;
-                }
+// ─── handle_signal ────────────────────────────────────────────────────────────
 
-                case OMSAction::Update: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        Order* slot = it->second;
-                        if (slot->timestamp >= event.order.timestamp) break;
-                        *slot = event.order;
-                    }
-                    // else: log discrepancy — order to update not found
-                    break;
-                }
 
-                case OMSAction::Delete: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        Order* slot = it->second;
-                        state_.stop_orders_[event.order.instrument_id].deallocate(slot);
-                        state_.client_id_stop_order_map.erase(it);
-                        state_.exchange_id_stop_order_map.erase(event.order.id);
+void OrderStateManager::handle_signal(const OMSEvent& event) {
+    assert(event.source == OMSEventSource::Websocket);
 
-                        if(event.reason == OrderReason::StopTrigger) {
-                            insert_order(state_, event);
-                        }
-                    }
-                    // else: log order to delete not found
-                    break;
-                }
-            }
+    switch (event.signal) {
+        case OMSSignal::OrdersInvalid:
+            mark_orders_invalid();
+            audit("src=WS type=SIGNAL  sig=%-30s -> maps_cleared pools_reset state=Invalid",
+                  oms_audit::signal_str(event.signal));
             break;
-        }
 
-        case OMSEventSource::Rest: {
-            // always apply regardless of channel state
-            switch (event.action) {
-                case OMSAction::Create: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        // WS arrived first — update only if REST is newer
-                        Order* slot = it->second;
-                        if (slot->timestamp >= event.order.timestamp) break;
-                        *slot = event.order;
-                    } else {
-                        insert_stop_order(state_, event);
-                    }
-                    break;
-                }
-
-                case OMSAction::Update: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        Order* slot = it->second;
-                        if (slot->timestamp >= event.order.timestamp) break;
-                        *slot = event.order;
-                    }
-                    break;
-                }
-
-                case OMSAction::Delete: {
-                    auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_stop_order_map.end()) {
-                        Order* slot = it->second;
-                        state_.stop_orders_[event.order.instrument_id].deallocate(slot);
-                        state_.client_id_stop_order_map.erase(it);
-                        state_.exchange_id_stop_order_map.erase(event.order.id);
-                    }
-                    break;
-                }
-            }
+        case OMSSignal::OrdersSnapshotComplete:
+            state_.orders_state_.store(ChannelState::Valid, std::memory_order_release);
+            audit("src=WS type=SIGNAL  sig=%-30s -> state=Valid  open_orders=%zu stop_orders=%zu",
+                  oms_audit::signal_str(event.signal),
+                  state_.exchange_id_order_map.size(),
+                  state_.exchange_id_stop_order_map.size());
             break;
-        }
 
-        case OMSEventSource::Reconcile: {
-            if (state_.orders_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
-
-            auto it = state_.client_id_stop_order_map.find(event.order.client_order_id);
-            if (it == state_.client_id_stop_order_map.end()) return;
-
-            Order* slot = it->second;
-            if (event.order.timestamp <= slot->timestamp) return;
-
-            // reconcile is ahead of local state — log field diffs
-            if (slot->side          != event.order.side          ||
-                slot->size          != event.order.size          ||
-                slot->state         != event.order.state         ||
-                slot->filled_size   != event.order.filled_size   ||
-                slot->unfilled_size != event.order.unfilled_size ||
-                slot->instrument_id != event.order.instrument_id) {
-                std::cerr << "[reconcile diff] id=" << event.order.id
-                          << " client_id=" << event.order.client_order_id
-                          << " side="      << (slot->side != event.order.side ? "DIFF" : "ok")
-                          << " size="      << slot->size          << "->" << event.order.size
-                          << " state="     << static_cast<int>(slot->state) << "->" << static_cast<int>(event.order.state)
-                          << " filled="    << slot->filled_size   << "->" << event.order.filled_size
-                          << " unfilled="  << slot->unfilled_size << "->" << event.order.unfilled_size
-                          << "\n";
-            }
+        case OMSSignal::PositionsInvalid:
+            mark_positions_invalid();
+            audit("src=WS type=SIGNAL  sig=%-30s -> positions_cleared state=Invalid",
+                  oms_audit::signal_str(event.signal));
             break;
-        }
+
+        case OMSSignal::PositionsSnapshotComplete:
+            state_.positions_state_.store(ChannelState::Valid, std::memory_order_release);
+            audit("src=WS type=SIGNAL  sig=%-30s -> state=Valid",
+                  oms_audit::signal_str(event.signal));
+            break;
+
+        case OMSSignal::WalletInvalid:
+            mark_wallet_invalid();
+            audit("src=WS type=SIGNAL  sig=%-30s -> wallet_cleared state=Invalid",
+                  oms_audit::signal_str(event.signal));
+            break;
+
+        case OMSSignal::WalletSnapshotComplete:
+            state_.wallet_state_.store(ChannelState::Valid, std::memory_order_release);
+            audit("src=WS type=SIGNAL  sig=%-30s -> state=Valid",
+                  oms_audit::signal_str(event.signal));
+            break;
     }
 }
+
+// ─── handle_order ─────────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_order(const OMSEvent& event) {
+    char buf[768];
+    const char* src = oms_audit::src_str(event.source);
+
     switch (event.source) {
 
         case OMSEventSource::Websocket: {
             if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Invalid)
-                // state_.orders_state_ = ChannelState::Rebuilding;
                 state_.orders_state_.store(ChannelState::Rebuilding, std::memory_order_release);
 
             if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding) {
-                // snapshot in progress — insert all incoming orders
                 insert_order(state_, event);
+                oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                audit("%s  [snapshot]", buf);
                 break;
             }
 
-            // Valid path
             switch (event.action) {
                 case OMSAction::Create: {
-                    auto it = state_.client_id_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_order_map.end()) {
-                        // order exists — REST arrived first, update only if WS is newer
+                    auto it = state_.exchange_id_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_order_map.end()) {
                         Order* slot = it->second;
                         if (slot->timestamp >= event.order.timestamp) break;
                         *slot = event.order;
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                        audit("%s  [REST arrived first, slot updated]", buf);
                     } else {
                         insert_order(state_, event);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                        audit("%s  [inserted  exchange_map=%zu client_map=%zu]", buf,
+                              state_.exchange_id_order_map.size(),
+                              state_.client_id_order_map.size());
                     }
                     break;
                 }
 
                 case OMSAction::Update: {
-                    auto it = state_.client_id_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_order_map.end()) {
+                    auto it = state_.exchange_id_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_order_map.end()) {
                         Order* slot = it->second;
                         if (slot->timestamp >= event.order.timestamp) break;
+                        oms_audit::fmt_order_diff(buf, sizeof(buf), src, "ORDER", *slot, event.order);
                         *slot = event.order;
+                        audit("%s", buf);
                     }
-                    // else: log discrepancy — order to update not found
                     break;
                 }
 
                 case OMSAction::Delete: {
-                    auto it = state_.client_id_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_order_map.end()) {
+                    auto it = state_.exchange_id_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_order_map.end()) {
                         Order* slot = it->second;
-                        if (event.order.side == OrderSide::Buy)
-                            state_.bids_[event.order.instrument_id].deallocate(slot);
-                        else
-                            state_.asks_[event.order.instrument_id].deallocate(slot);
-                        state_.client_id_order_map.erase(it);
-                        state_.exchange_id_order_map.erase(event.order.id);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "DELETE", "ORDER", *slot);
+                        erase_order(state_, event.order.id);
+                        audit("%s  [removed  exchange_map=%zu client_map=%zu]", buf,
+                              state_.exchange_id_order_map.size(),
+                              state_.client_id_order_map.size());
                     }
-                    // else: log order to delete not found
                     break;
                 }
             }
@@ -289,17 +253,21 @@ void OrderStateManager::handle_order(const OMSEvent& event) {
         }
 
         case OMSEventSource::Rest: {
-            // always apply regardless of channel state
             switch (event.action) {
                 case OMSAction::Create: {
                     auto it = state_.client_id_order_map.find(event.order.client_order_id);
                     if (it != state_.client_id_order_map.end()) {
-                        // WS arrived first — update only if REST is newer
                         Order* slot = it->second;
                         if (slot->timestamp >= event.order.timestamp) break;
                         *slot = event.order;
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                        audit("%s  [WS arrived first, slot updated]", buf);
                     } else {
                         insert_order(state_, event);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                        audit("%s  [inserted  exchange_map=%zu client_map=%zu]", buf,
+                              state_.exchange_id_order_map.size(),
+                              state_.client_id_order_map.size());
                     }
                     break;
                 }
@@ -309,21 +277,22 @@ void OrderStateManager::handle_order(const OMSEvent& event) {
                     if (it != state_.client_id_order_map.end()) {
                         Order* slot = it->second;
                         if (slot->timestamp >= event.order.timestamp) break;
+                        oms_audit::fmt_order_diff(buf, sizeof(buf), src, "ORDER", *slot, event.order);
                         *slot = event.order;
+                        audit("%s", buf);
                     }
                     break;
                 }
 
                 case OMSAction::Delete: {
-                    auto it = state_.client_id_order_map.find(event.order.client_order_id);
-                    if (it != state_.client_id_order_map.end()) {
+                    auto it = state_.exchange_id_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_order_map.end()) {
                         Order* slot = it->second;
-                        if (event.order.side == OrderSide::Buy)
-                            state_.bids_[event.order.instrument_id].deallocate(slot);
-                        else
-                            state_.asks_[event.order.instrument_id].deallocate(slot);
-                        state_.client_id_order_map.erase(it);
-                        state_.exchange_id_order_map.erase(event.order.id);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "DELETE", "ORDER", *slot);
+                        erase_order(state_, event.order.id);
+                        audit("%s  [removed  exchange_map=%zu client_map=%zu]", buf,
+                              state_.exchange_id_order_map.size(),
+                              state_.client_id_order_map.size());
                     }
                     break;
                 }
@@ -333,111 +302,255 @@ void OrderStateManager::handle_order(const OMSEvent& event) {
 
         case OMSEventSource::Reconcile: {
             if (state_.orders_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
-
-            auto it = state_.client_id_order_map.find(event.order.client_order_id);
-            if (it == state_.client_id_order_map.end()) return;
-
+            auto it = state_.exchange_id_order_map.find(event.order.id);
+            if (it == state_.exchange_id_order_map.end()) return;
             Order* slot = it->second;
             if (event.order.timestamp <= slot->timestamp) return;
 
-            // reconcile is ahead of local state — log field diffs
-            if (slot->side          != event.order.side          ||
-                slot->size          != event.order.size          ||
-                slot->state         != event.order.state         ||
-                slot->filled_size   != event.order.filled_size   ||
-                slot->unfilled_size != event.order.unfilled_size ||
-                slot->instrument_id != event.order.instrument_id) {
-                std::cerr << "[reconcile diff] id=" << event.order.id
-                          << " client_id=" << event.order.client_order_id
-                          << " side="      << (slot->side != event.order.side ? "DIFF" : "ok")
-                          << " size="      << slot->size          << "->" << event.order.size
-                          << " state="     << static_cast<int>(slot->state) << "->" << static_cast<int>(event.order.state)
-                          << " filled="    << slot->filled_size   << "->" << event.order.filled_size
-                          << " unfilled="  << slot->unfilled_size << "->" << event.order.unfilled_size
-                          << "\n";
+            if (slot->side != event.order.side || slot->size != event.order.size ||
+                slot->state != event.order.state || slot->filled_size != event.order.filled_size ||
+                slot->unfilled_size != event.order.unfilled_size) {
+                oms_audit::fmt_order_diff(buf, sizeof(buf), src, "ORDER", *slot, event.order);
+                audit("%s  [RECONCILE DIFF]", buf);
             }
             break;
         }
     }
 }
 
-void OrderStateManager::handle_position(const OMSEvent& event) {
+// ─── handle_stop_order ────────────────────────────────────────────────────────
 
-    switch(event.source) {
+void OrderStateManager::handle_stop_order(const OMSEvent& event) {
+    char buf[768];
+    const char* src = oms_audit::src_str(event.source);
+
+    switch (event.source) {
+
+        case OMSEventSource::Websocket: {
+            if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Invalid)
+                state_.orders_state_.store(ChannelState::Rebuilding, std::memory_order_release);
+
+            if (state_.orders_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding) {
+                insert_stop_order(state_, event);
+                oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "STOP", event.order);
+                audit("%s  [snapshot]", buf);
+                break;
+            }
+
+            switch (event.action) {
+                case OMSAction::Create: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        if (slot->timestamp >= event.order.timestamp) break;
+                        *slot = event.order;
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "STOP", event.order);
+                        audit("%s  [REST arrived first, slot updated]", buf);
+                    } else {
+                        insert_stop_order(state_, event);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "STOP", event.order);
+                        audit("%s  [inserted  stop_map=%zu]", buf,
+                              state_.exchange_id_stop_order_map.size());
+                    }
+                    break;
+                }
+
+                case OMSAction::Update: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        if (slot->timestamp >= event.order.timestamp) break;
+                        oms_audit::fmt_order_diff(buf, sizeof(buf), src, "STOP", *slot, event.order);
+                        *slot = event.order;
+                        audit("%s", buf);
+                    }
+                    break;
+                }
+
+                case OMSAction::Delete: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        // Log stop order removal before freeing the slot.
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "DELETE", "STOP", *slot);
+                        erase_stop_order(state_, event.order.id);
+                        audit("%s  [removed  stop_map=%zu]", buf,
+                              state_.exchange_id_stop_order_map.size());
+
+                        if (event.order.reason == OrderReason::StopTrigger) {
+                            // No WS create will arrive — insert a synthetic open order so
+                            // the OMS reflects the triggered state immediately.
+                            insert_order(state_, event);
+                            oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "ORDER", event.order);
+                            audit("%s  [synthetic: stop_trigger, no WS create received]", buf);
+                        }
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+
+        case OMSEventSource::Rest: {
+            switch (event.action) {
+                case OMSAction::Create: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        if (slot->timestamp >= event.order.timestamp) break;
+                        *slot = event.order;
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "STOP", event.order);
+                        audit("%s  [WS arrived first, slot updated]", buf);
+                    } else {
+                        insert_stop_order(state_, event);
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "CREATE", "STOP", event.order);
+                        audit("%s  [inserted  stop_map=%zu]", buf,
+                              state_.exchange_id_stop_order_map.size());
+                    }
+                    break;
+                }
+
+                case OMSAction::Update: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        if (slot->timestamp >= event.order.timestamp) break;
+                        oms_audit::fmt_order_diff(buf, sizeof(buf), src, "STOP", *slot, event.order);
+                        *slot = event.order;
+                        audit("%s", buf);
+                    }
+                    break;
+                }
+
+                case OMSAction::Delete: {
+                    auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+                    if (it != state_.exchange_id_stop_order_map.end()) {
+                        Order* slot = it->second;
+                        oms_audit::fmt_order(buf, sizeof(buf), src, "DELETE", "STOP", *slot);
+                        erase_stop_order(state_, event.order.id);
+                        audit("%s  [removed  stop_map=%zu]", buf,
+                              state_.exchange_id_stop_order_map.size());
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+
+        case OMSEventSource::Reconcile: {
+            if (state_.orders_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
+            auto it = state_.exchange_id_stop_order_map.find(event.order.id);
+            if (it == state_.exchange_id_stop_order_map.end()) return;
+            Order* slot = it->second;
+            if (event.order.timestamp <= slot->timestamp) return;
+
+            if (slot->side != event.order.side || slot->size != event.order.size ||
+                slot->state != event.order.state || slot->filled_size != event.order.filled_size ||
+                slot->unfilled_size != event.order.unfilled_size) {
+                oms_audit::fmt_order_diff(buf, sizeof(buf), src, "STOP", *slot, event.order);
+                audit("%s  [RECONCILE DIFF]", buf);
+            }
+            break;
+        }
+    }
+}
+
+// ─── handle_position ─────────────────────────────────────────────────────────
+
+void OrderStateManager::handle_position(const OMSEvent& event) {
+    char buf[768];
+    const char* src = oms_audit::src_str(event.source);
+
+    switch (event.source) {
         case OMSEventSource::Websocket: {
             if (state_.positions_state_.load(std::memory_order_relaxed) == ChannelState::Invalid)
-                // state_.positions_state_ = ChannelState::Rebuilding;
                 state_.positions_state_.store(ChannelState::Rebuilding, std::memory_order_release);
 
             if (state_.positions_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding) {
-                // snapshot in progress — insert all incoming positions
                 state_.positions_[event.position.instrument_id] = event.position;
+                oms_audit::fmt_position(buf, sizeof(buf), src, "CREATE", event.position);
+                audit("%s  [snapshot]", buf);
                 break;
             }
 
-            switch(event.action) {
+            switch (event.action) {
                 case OMSAction::Create: {
                     state_.positions_[event.position.instrument_id] = event.position;
+                    oms_audit::fmt_position(buf, sizeof(buf), src, "CREATE", event.position);
+                    audit("%s", buf);
                     break;
                 }
 
                 case OMSAction::Update: {
-                    if(state_.positions_[event.position.instrument_id].timestamp > event.position.timestamp) {
-                        //log, position is newer than the update, the update is stale
+                    Position& slot = state_.positions_[event.position.instrument_id];
+                    if (slot.timestamp > event.position.timestamp) {
+                        audit("src=%s type=POS  action=UPDATE  sym=%s  [stale update dropped ts=%lu slot_ts=%lu]",
+                              src, event.position.symbol,
+                              event.position.timestamp, slot.timestamp);
                         break;
                     }
-
-                    //also assert that the positions exists 
-                    assert(state_.positions_[event.position.instrument_id].instrument_id == event.position.instrument_id);
-                    state_.positions_[event.position.instrument_id] = event.position;
+                    oms_audit::fmt_position_diff(buf, sizeof(buf), src, slot, event.position);
+                    slot = event.position;
+                    audit("%s", buf);
                     break;
                 }
 
                 case OMSAction::Delete: {
-                    state_.positions_[event.position.instrument_id]= {};
+                    oms_audit::fmt_position(buf, sizeof(buf), src, "DELETE",
+                                            state_.positions_[event.position.instrument_id]);
+                    state_.positions_[event.position.instrument_id] = {};
+                    audit("%s  [cleared]", buf);
                     break;
                 }
             }
-
             break;
         }
-        case OMSEventSource::Reconcile:
-            if(state_.positions_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
-            if(state_.positions_[event.position.instrument_id].timestamp > event.position.timestamp) return;
 
-            Position& slot = state_.positions_[event.position.instrument_id];
+        case OMSEventSource::Reconcile: {
+            if (state_.positions_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
+            const Position& slot = state_.positions_[event.position.instrument_id];
+            if (slot.timestamp > event.position.timestamp) return;
 
-            if (slot.size          != event.position.size          ||
-                slot.instrument_id != event.position.instrument_id) {
-                std::cerr << "[reconcile diff] sym=" << slot.symbol
-                          << " size="  << slot.size << "->" << event.position.size
-                          << "\n";
+            if (slot.size != event.position.size || slot.instrument_id != event.position.instrument_id) {
+                oms_audit::fmt_position_diff(buf, sizeof(buf), src, slot, event.position);
+                audit("%s  [RECONCILE DIFF]", buf);
             }
+            break;
+        }
+
+        case OMSEventSource::Rest:
             break;
     }
 }
 
-void OrderStateManager::handle_fill(const OMSEvent& event) {}
+// ─── handle_fill ──────────────────────────────────────────────────────────────
+
+void OrderStateManager::handle_fill(const OMSEvent& event) {
+    (void)event;
+}
+
+// ─── handle_wallet ────────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_wallet(const OMSEvent& event) {
-    switch (event.source) {
+    char buf[512];
+    const char* src = oms_audit::src_str(event.source);
 
+    switch (event.source) {
         case OMSEventSource::Websocket: {
             if (state_.wallet_state_.load(std::memory_order_relaxed) == ChannelState::Invalid)
-                // state_.wallet_state_ = ChannelState::Rebuilding;
                 state_.wallet_state_.store(ChannelState::Rebuilding, std::memory_order_release);
 
-            // if (state_.wallet_state_ == ChannelState::Rebuilding) {
-
-            if(state_.wallet_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding)
-            {
+            if (state_.wallet_state_.load(std::memory_order_relaxed) == ChannelState::Rebuilding) {
                 state_.wallet_ = event.wallet;
+                oms_audit::fmt_wallet(buf, sizeof(buf), src, event.wallet);
+                audit("%s  [snapshot]", buf);
                 break;
             }
 
-            // Valid path — timestamp guard
             if (event.wallet.timestamp <= state_.wallet_.timestamp) break;
             state_.wallet_ = event.wallet;
+            oms_audit::fmt_wallet(buf, sizeof(buf), src, event.wallet);
+            audit("%s", buf);
             break;
         }
 
@@ -445,30 +558,32 @@ void OrderStateManager::handle_wallet(const OMSEvent& event) {
             if (state_.wallet_state_.load(std::memory_order_relaxed) != ChannelState::Valid) return;
             if (event.wallet.timestamp <= state_.wallet_.timestamp) return;
 
-            // reconcile is ahead — log diffs
-            if (state_.wallet_.balance           != event.wallet.balance           ||
-                state_.wallet_.available_balance  != event.wallet.available_balance  ||
-                state_.wallet_.position_margin    != event.wallet.position_margin    ||
-                state_.wallet_.order_margin       != event.wallet.order_margin) {
-                std::cerr << "[reconcile wallet diff]"
-                          << " balance="    << state_.wallet_.balance           << "->" << event.wallet.balance
-                          << " available="  << state_.wallet_.available_balance  << "->" << event.wallet.available_balance
-                          << " pos_margin=" << state_.wallet_.position_margin    << "->" << event.wallet.position_margin
-                          << " ord_margin=" << state_.wallet_.order_margin       << "->" << event.wallet.order_margin
-                          << "\n";
+            if (state_.wallet_.balance          != event.wallet.balance          ||
+                state_.wallet_.available_balance != event.wallet.available_balance ||
+                state_.wallet_.position_margin   != event.wallet.position_margin   ||
+                state_.wallet_.order_margin      != event.wallet.order_margin) {
+                oms_audit::fmt_wallet(buf, sizeof(buf), src, event.wallet);
+                audit("%s  [RECONCILE DIFF  "
+                      "balance=%.6f->%.6f available=%.6f->%.6f "
+                      "pos_margin=%.6f->%.6f ord_margin=%.6f->%.6f]",
+                      buf,
+                      state_.wallet_.balance,           event.wallet.balance,
+                      state_.wallet_.available_balance,  event.wallet.available_balance,
+                      state_.wallet_.position_margin,    event.wallet.position_margin,
+                      state_.wallet_.order_margin,       event.wallet.order_margin);
             }
-
-            state_.wallet_  = event.wallet;
+            state_.wallet_ = event.wallet;
             break;
         }
 
         case OMSEventSource::Rest:
-            break;  // no REST source for wallet
+            break;
     }
 }
 
+// ─── invalidation helpers ────────────────────────────────────────────────────
+
 void OrderStateManager::mark_orders_invalid() {
-    // state_.orders_state_ = ChannelState::Invalid;
     state_.orders_state_.store(ChannelState::Invalid, std::memory_order_release);
     state_.open_buy_contracts_.fill(0);
     state_.open_sell_contracts_.fill(0);
@@ -478,22 +593,22 @@ void OrderStateManager::mark_orders_invalid() {
     state_.exchange_id_order_map.clear();
     state_.client_id_stop_order_map.clear();
     state_.exchange_id_stop_order_map.clear();
-    for (auto& pool : state_.bids_) pool.reset();
-    for (auto& pool : state_.asks_) pool.reset();
+    for (auto& pool : state_.bids_)        pool.reset();
+    for (auto& pool : state_.asks_)        pool.reset();
     for (auto& pool : state_.stop_orders_) pool.reset();
 }
 
 void OrderStateManager::mark_positions_invalid() {
     state_.positions_state_.store(ChannelState::Invalid, std::memory_order_release);
-    // state_.positions_state_ = ChannelState::Invalid;
     state_.positions_ = {};
 }
 
 void OrderStateManager::mark_wallet_invalid() {
     state_.wallet_state_.store(ChannelState::Invalid, std::memory_order_release);
-    // state_.wallet_state_ = ChannelState::Invalid;
     state_.wallet_ = {};
 }
+
+// ─── state accessors ─────────────────────────────────────────────────────────
 
 ChannelState OrderStateManager::get_orders_state() const {
     return state_.orders_state_.load(std::memory_order_acquire);

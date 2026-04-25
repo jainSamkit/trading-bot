@@ -1,10 +1,14 @@
+#pragma once
 #include "delta_exchange/models/product.hpp"
 #include "core/memory_pool.hpp"
 #include "delta_exchange/models/order.hpp"
 #include "delta_exchange/models/position.hpp"
 #include "delta_exchange/models/fill.hpp"
+#include "delta_exchange/models/wallet.hpp"
 #include "core/spsc_ring.hpp"
 #include <atomic>
+#include <cstdarg>
+#include <cstdio>
 #include <unordered_map>
 
 
@@ -23,7 +27,7 @@ enum class OMSEventType : uint8_t {
     Position,
     Fill,
     Wallet,
-    OMSSignal,
+    OMSSignal
 };
 
 enum class OMSEventSource : uint8_t {
@@ -45,6 +49,7 @@ enum class OMSAction : uint8_t {
 };
 
 struct OMSEvent {
+    OMSEvent() : type{}, source{}, action{}, order{} {}
     OMSEventType   type;
     OMSEventSource source;
     OMSAction      action;
@@ -88,30 +93,26 @@ class OrderStateManager {
 public:
 
     explicit OrderStateManager(
-        SpscRing<OMSEvent, 256>* const oms_ws_ring, 
-        SpscRing<OMSEvent, 256>* const oms_rest_ring, 
+        SpscRing<OMSEvent, 256>* const oms_ws_ring,
+        SpscRing<OMSEvent, 256>* const oms_rest_ring,
         SpscRing<OMSEvent, 256>* const oms_reconcile_ring,
-        const ProductTable& products);
+        const ProductTable& products,
+        const char* audit_path = "oms_audit.log");
+
+    ~OrderStateManager();
 
     void run(std::atomic<bool>& running);
 
-    ChannelState get_orders_state() const;
+    ChannelState get_orders_state()    const;
     ChannelState get_positions_state() const;
+
+    // Test/debug only — read state without synchronisation (accepted race for logging).
+    const OMSState& debug_state() const { return state_; }
 
 private:
     void drain_ws_ring();
     void drain_rest_ring();
     void drain_reconcile_ring();
-
-    using Handler = void (OrderStateManager::*)(const OMSEvent&);
-    static constexpr Handler kHandlers[] = {
-        &OrderStateManager::handle_order,
-        &OrderStateManager::handle_stop_order,
-        &OrderStateManager::handle_position,
-        &OrderStateManager::handle_fill,
-        &OrderStateManager::handle_wallet,
-        &OrderStateManager::handle_signal,
-    };
 
     void handle_order(const OMSEvent& event);
     void handle_stop_order(const OMSEvent& event);
@@ -119,14 +120,31 @@ private:
     void handle_fill(const OMSEvent& event);
     void handle_wallet(const OMSEvent& event);
     void handle_signal(const OMSEvent& event);
+    // void hello_there(const OMSEvent& event);
+
+    // void dispatch_event(const OMSEvent& event);
+
+    // Previous dispatch (member-pointer table; replaced by dispatch_event + switch — avoids UBSan on bad ev->type):
+    using Handler = void (OrderStateManager::*)(const OMSEvent&);
+    static constexpr Handler kHandlers[] = {
+        &OrderStateManager::handle_order,
+        &OrderStateManager::handle_stop_order,
+        &OrderStateManager::handle_position,
+        &OrderStateManager::handle_fill,
+        &OrderStateManager::handle_wallet,
+        &OrderStateManager::handle_signal
+    };
 
     void mark_orders_invalid();
     void mark_positions_invalid();
     void mark_wallet_invalid();
+
+    void audit(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
 
     const ProductTable&      products_;
     OMSState                 state_;
     SpscRing<OMSEvent, 256>* oms_ws_ring_;
     SpscRing<OMSEvent, 256>* oms_rest_ring_;
     SpscRing<OMSEvent, 256>* oms_reconcile_ring_;
+    FILE*                    audit_ = nullptr;
 };

@@ -1,7 +1,10 @@
+#pragma once
 #include "transport/wsclient.hpp"
+#include "oms/oms_manager.hpp"
 #include <openssl/ssl.h>
 #include <cassert>
 #include <cerrno>
+#include <sys/socket.h>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -12,7 +15,7 @@
 #include "delta_exchange/models/product.hpp"
 #include "delta_exchange/sessions/types.hpp"
 #include "core/spsc_ring.hpp"
-#include "src/oms/oms_manager.hpp"
+#include "oms/oms_manager.hpp"
 
 class OrderSession;
 class PositionFillSession;
@@ -21,7 +24,7 @@ class WalletSession;
 class DeltaOMSWebsocketClient : public WebSocketClient<DeltaOMSWebsocketClient> {
 public:
     DeltaOMSWebsocketClient(const char* host, int port, const char* path, const char* api_key, const char* api_secret,
-                         const ProductTable& products, SpscRing<OMSEvent,4096>* const ring);
+                         const ProductTable& products, SpscRing<OMSEvent, 256>* const ring);
 
     ~DeltaOMSWebsocketClient();
 
@@ -57,6 +60,13 @@ public:
 
     void shutdownReactor();
 
+    // Shuts down the order session's TCP socket from outside the epoll thread.
+    // The reactor sees EPOLLERR/EPOLLHUP and triggers the full reconnect cycle:
+    //   OrdersInvalid → snapshot arrives → Rebuilding → OrdersSnapshotComplete → Valid.
+    // Use only in tests — not thread-safe against concurrent shutdown().
+    // Defined out-of-line below, after OrderSession is fully declared.
+    void force_disconnect_for_test();
+
     simdjson::ondemand::parser& get_parser() { return oms_parser_; }
 
     const ProductTable& products_;
@@ -67,15 +77,20 @@ protected:
     simdjson::ondemand::parser oms_parser_;
 
 private:
-    std::unique_ptr<OrderSession>                   orderSession_;
-    std::unique_ptr<PositionFillSession>            positionFillSession_;
-    std::unique_ptr<WalletSession>                  walletSession_;
-    SpscRing<OMSEvent, 4096>* const              ring_;
+    std::unique_ptr<OrderSession>        orderSession_;
+    std::unique_ptr<PositionFillSession> positionFillSession_;
+    std::unique_ptr<WalletSession>       walletSession_;
+    SpscRing<OMSEvent, 256>* const       ring_;   // fixed: was 4096, constructor takes 256
 
-    bool shutdown_ = false;
+    bool      shutdown_ = false;
     EpollSlot eventFDSlot;
 };
 
 #include "delta_exchange/sessions/order.hpp"
 #include "delta_exchange/sessions/position.hpp"
 #include "delta_exchange/sessions/wallet.hpp"
+
+// Out-of-line: OrderSession must be fully defined before calling get_fd().
+inline void DeltaOMSWebsocketClient::force_disconnect_for_test() {
+    orderSession_->reconnect();
+}

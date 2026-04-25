@@ -1,6 +1,7 @@
 #pragma once
-#include<atomic>
-#include<optional>
+#include <atomic>
+// #include <optional>
+// #include <iostream>
 
 struct Ring {
     alignas(64) std::atomic<uint64_t>head_;
@@ -29,7 +30,9 @@ class SpscRing {
 
         T* push_begin() {
             uint64_t head_cache = ring_.head_.load(std::memory_order_relaxed);
-            while(head_cache -  ring_.tail_.load(std::memory_order_acquire) == N) {};
+            uint64_t tail_cache = ring_.tail_.load(std::memory_order_acquire);
+            while(head_cache -  tail_cache == N) {};
+
             return static_cast<T*>(&buffer_[head_cache & (N-1)]);
         }
 
@@ -49,7 +52,7 @@ class SpscRing {
             return;
         }
     private:
-        T buffer_[N]= {};
+        alignas(T) T buffer_[N]= {};
         Ring ring_ {};
 };
 

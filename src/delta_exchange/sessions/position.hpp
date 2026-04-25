@@ -24,6 +24,8 @@ public:
     void push_signal(OMSSignal sig) {
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;
+        
+        *slot = {};
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
@@ -180,6 +182,7 @@ public:
     }
 
     void onMessage(std::string_view msg) {
+        // std::cout<<"[raw msg position_fill]: "<<msg<<'\n';
         if (msg.find(R"("subscriptions")") != std::string_view::npos) return;
 
         simdjson::ondemand::parser& parser = client_.get_parser();
@@ -192,6 +195,7 @@ public:
         if (msg.find(R"("v2/user_trades")") != std::string_view::npos) {
             OMSEvent* slot = client_.get_ring_slot();
             if (!slot) return;
+            *slot = {};
             slot->type   = OMSEventType::Fill;
             slot->source = OMSEventSource::Websocket;
 
@@ -200,12 +204,16 @@ public:
             uint64_t seq_no = 0;
             parseFill(obj, *slot, seq_no);
 
-            if (seq_no != fillSeq_[slot->fill.instrument_id] + 1) {
+            if (fillSeq_[slot->fill.instrument_id] != 0 && seq_no != fillSeq_[slot->fill.instrument_id] + 1) {
+                in_snapshot_ = true;
                 fillSeq_.fill(0);
                 push_signal(OMSSignal::PositionsInvalid);
                 reconnect();
                 return;  // no commit — slot abandoned
             }
+
+            if(in_snapshot_) in_snapshot_ = false;
+
             fillSeq_[slot->fill.instrument_id] = seq_no;
             printFill(*slot);
             client_.commit_to_ring();
@@ -214,7 +222,6 @@ public:
 
         // Position snapshot — single message, all symbols in result[]
         if (msg.find(R"("snapshot")") != std::string_view::npos) {
-            push_signal(OMSSignal::PositionsInvalid);
 
             for (auto field : doc.get_object()) {
                 std::string_view key;
@@ -228,6 +235,8 @@ public:
                     if (elem.get_object().get(obj)) continue;
                     OMSEvent* slot = client_.get_ring_slot();
                     if (!slot) continue;  // ring full — drop
+
+                    *slot = {};
                     slot->type   = OMSEventType::Position;
                     slot->source = OMSEventSource::Websocket;
                     slot->action = OMSAction::Create;
@@ -237,13 +246,17 @@ public:
                 }
             }
 
+            if (in_snapshot_) in_snapshot_ = false;
             push_signal(OMSSignal::PositionsSnapshotComplete);
             return;
         }
 
+        if(in_snapshot_) return;
         // Position live update — fields at top level
         OMSEvent* slot = client_.get_ring_slot();
         if (!slot) return;
+
+        *slot = {};
         slot->type   = OMSEventType::Position;
         slot->source = OMSEventSource::Websocket;
         slot->action = OMSAction::Update;
@@ -256,18 +269,20 @@ public:
     }
 
     void onSubscribe() {
+        in_snapshot_ = true;
         fillSeq_.fill(0);
         push_signal(OMSSignal::PositionsInvalid);
 
         std::string msg =
             R"({"type":"subscribe","payload":{"channels":[{"name":"positions","symbols":["all"]},{"name":"v2/user_trades","symbols":["all"]}]}})";
 
-        std::cout << msg << "\n";
+        // std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaOMSWebsocketClient::HEARTBEAT_TIMEOUT_MS);
     }
 
 private:
+    bool in_snapshot_ = true;
     std::array<uint64_t, ProductTable::MAX_INSTRUMENTS> fillSeq_{};
 };

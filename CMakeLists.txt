@@ -73,33 +73,39 @@ add_compile_options(
 )
 
 # ── Sources (match tree under src/) ────────────────────────────────────────────
-add_executable(trading_bot
-    src/main.cpp
+set(BOT_SOURCES
     src/transport/http_client.cpp
     src/delta_exchange/rest_client.cpp
     src/delta_exchange/ws_client.cpp
     src/delta_exchange/oms_ws_client.cpp
-    src/delta_exchange/api/product.cpp
-    src/delta_exchange/api/order.cpp
-    src/delta_exchange/api/position.cpp
-    src/delta_exchange/api/wallet.cpp
-    src/delta_exchange/api/fill.cpp
+    src/delta_exchange/api/product/product.cpp
+    src/delta_exchange/api/order/order.cpp
+    src/delta_exchange/api/position/position.cpp
+    src/delta_exchange/api/wallet/wallet.cpp
+    src/delta_exchange/api/fill/fill.cpp
     src/market_state/latency_stats.cpp
     src/market_state/market_state.cpp
+    src/oms/oms_manager.cpp
 )
 
-target_link_libraries(trading_bot PRIVATE
-    Threads::Threads
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    simdjson
-    httplib::httplib
-)
-if(TARGET Boost::headers)
-    target_link_libraries(trading_bot PRIVATE Boost::headers)
-else()
-    target_include_directories(trading_bot PRIVATE ${Boost_INCLUDE_DIRS})
-endif()
+add_executable(trading_bot src/main.cpp ${BOT_SOURCES})
+
+add_executable(oms_test tests/main_oms_test.cpp ${BOT_SOURCES})
+
+foreach(tgt trading_bot oms_test)
+    target_link_libraries(${tgt} PRIVATE
+        Threads::Threads
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        simdjson
+        httplib::httplib
+    )
+    if(TARGET Boost::headers)
+        target_link_libraries(${tgt} PRIVATE Boost::headers)
+    else()
+        target_include_directories(${tgt} PRIVATE ${Boost_INCLUDE_DIRS})
+    endif()
+endforeach()
 
 # ── Usage ──────────────────────────────────────────────────────────────────────
 # mkdir build && cd build

@@ -19,26 +19,23 @@ public:
     void cancel_order      (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
     void cancel_all_orders (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
     void close_all_positions(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void get_open_orders(const OMSEventSource& event_source = OMSEventSource::Reconcile, SpscRing<OMSEvent, 256>* ring);
-    void get_open_positions(const OMSEventSource& event_source = OMSEventSource::Reconcile, SpscRing<OMSEvent, 256>* ring);
-    void get_wallet(const OMSEventSource& event_source = OMSEventSource::Reconcile);
+    void reconcile_open_orders    (SpscRing<OMSEvent, 256>* ring);
+    void reconcile_open_positions (SpscRing<OMSEvent, 256>* ring);
+    void reconcile_wallet         (SpscRing<OMSEvent, 256>* ring);
 
     // reconcile / init fetches
     httplib::Result get_products (const std::string& query = "");
     httplib::Result get_product  (const std::string& symbol);
     httplib::Result get_orders   (const std::string& query = "");
-    httplib::Result get_order    (int64_t order_id);
     httplib::Result get_positions(const std::string& query = "");
     httplib::Result get_wallet   (const std::string& query = "");
 
 private:
-    httplib::Result place_order_http        (const std::string& body);
-    httplib::Result cancel_order_http       (int64_t order_id, const std::string& body);
-    httplib::Result cancel_all_orders_http  (const std::string& body);
-    httplib::Result edit_order_http         (int64_t order_id, const std::string& body);
-    httplib::Result get_open_orders_http(const std::string& body);
-    httplib::Result get_open_positions_http(const std::string& body);
-    httplib::Result get_wallet_http(const std::string& body);
+    httplib::Result place_order_http         (const std::string& body);
+    httplib::Result cancel_order_http        (const std::string& body);
+    httplib::Result cancel_all_orders_http   (const std::string& body);
+    httplib::Result edit_order_http          (const std::string& body);
+    httplib::Result close_all_positions_http (const std::string& body);
 
     httplib::Headers auth_headers(const std::string& method,
                                   const std::string& path,
@@ -52,6 +49,7 @@ private:
                      const std::string& body);
 
     static std::string to_hex(const unsigned char* data, size_t len);
+    static int64_t now_s();
     static int64_t now_ms();
 
     std::string          api_key_;

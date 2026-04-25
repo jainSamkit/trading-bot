@@ -84,3 +84,22 @@ struct CancelAllOrderRequest {
     static bool parse_success(std::string_view json);
 };
 
+struct GetOpenOrdersRequest {
+    std::string states    = "open";   // "open" for regular orders, "pending" for stop orders
+    int         page_num  = 1;
+    int         page_size = 30;
+
+    // Builds query string: states=open&page_num=1&page_size=30
+    std::string query() const;
+
+    // Parses one page of GET /v2/orders response into out_events[0..max_events].
+    // Returns number of events parsed, sets has_more based on meta.total_count.
+    static int deserialize_page(std::string_view json,
+                                OMSEvent* out_events,
+                                int max_events,
+                                bool& has_more,
+                                int page_num,
+                                int page_size,
+                                const ProductTable& products);
+};
+
