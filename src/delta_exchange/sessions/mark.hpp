@@ -9,31 +9,19 @@ public:
 
     explicit MarkSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<MarkSession, DeltaWebsocketClient>(client, sessionID) {}
-
+        
     static double toDouble(std::string_view sv) {
         double val = 0.0;
         ::std::from_chars(sv.data(), sv.data() + sv.size(), val);
         return val;
     }
 
-    // void parsePriceBand(simdjson::ondemand::value val, MarkPriceData::PriceBand& price_band) {
-    //     simdjson::ondemand::object band;
-    //     if (val.get_object().get(band)) return;  // was: continue (invalid outside loop)
-    //     for (auto f : band) {
-    //         std::string_view key;
-    //         if (f.unescaped_key().get(key)) continue;
-    //         std::string_view value;
-    //         if (f.value().get_string().get(value)) continue;
-    //         double price = toDouble(value);
-    //         if (key == "lower_limit") price_band.lower_limit = price;
-    //         if (key == "upper_limit") price_band.upper_limit = price;
-    //     }
-    // }
-
     void onMessage(std::string_view msg) {  // was: unnamed parameter
         // std::cout<<"[raw msg]: "<<msg<<'\n';
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::MarkPrice;
+        auto& mark_price_slot = slot->mark_price_data;
+        mark_price_slot = MarkPriceData{};
 
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
@@ -47,25 +35,23 @@ public:
             if (key == "p") {
                 std::string_view price_str;
                 if (field.value().get_string().get(price_str)) continue;
-                (*slot).mark_price.price = toDouble(price_str);
-            // } else if (key == "sy") {
-            //     parsePriceBand(field.value(), (*slot).mark_price.price_band);  // was: parseLevels
+                mark_price_slot.price = toDouble(price_str);
             } else if (key == "ts") {
-                if (field.value().get_uint64().get((*slot).mark_price.timestamp)) {}  // was: (*slot).l2.timestamp
+                if (field.value().get_uint64().get(mark_price_slot.timestamp)) {}  // was: (*slot).l2.timestamp
             } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
                 if (symbol.starts_with("MARK:")) symbol.remove_prefix(5);
-                (*slot).mark_price.instrument_id = client_.products_.idfromSymbol(symbol);
+                mark_price_slot.instrument_id = client_.products_.idfromSymbol(symbol);
             }
         }
 
-        if ((*slot).mark_price.instrument_id == UINT8_MAX) return;
+        if (mark_price_slot.instrument_id == UINT8_MAX) return;
 
         slot->t_kernel = parser_.t_kernel;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
-        (*slot).instrument_id = (*slot).mark_price.instrument_id;
+        slot -> instrument_id = mark_price_slot.instrument_id;
         client_.commit_to_ring();
     }
 

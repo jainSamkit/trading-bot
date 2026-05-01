@@ -92,6 +92,12 @@ add_executable(trading_bot src/main.cpp ${BOT_SOURCES})
 
 add_executable(oms_test tests/main_oms_test.cpp ${BOT_SOURCES})
 
+# ── Standalone tools ───────────────────────────────────────────────────────────
+# shm_inspect: attaches to /trading_bot_state and prints live snapshots + trades.
+# No bot sources needed — pure header-only consumer of SharedState.
+add_executable(shm_inspect tools/shm_inspect.cpp)
+target_link_libraries(shm_inspect PRIVATE Threads::Threads rt)
+
 foreach(tgt trading_bot oms_test)
     target_link_libraries(${tgt} PRIVATE
         Threads::Threads

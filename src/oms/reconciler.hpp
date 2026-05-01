@@ -7,8 +7,9 @@ concept IsTCPClient = std::derived_from<T, TcpClient>;
 
 template<IsTCPClient RestClient>
 class Reconciler {
+    static constexpr size_t OMS_RING_SIZE = cfg::OMS_RING_SIZE;
 
-    explicit Reconciler(const char* host, const char* api_key, const char* api_secret, const ProductTable& products, SpscRing<OMSEvent, 256>*  reconcile_ring): 
+    explicit Reconciler(const char* host, const char* api_key, const char* api_secret, const ProductTable& products, SpscRing<OMSEvent, OMS_RING_SIZE>*  reconcile_ring): 
     host_(host), api_key_(api_key), api_secret_(api_secret), products_(products), reconcile_ring_(reconcile_ring),client_(host, api_key, api_secret, products) {}
 
     void run(std::atomic<bool>& running_) {
@@ -32,5 +33,5 @@ class Reconciler {
         const OrderStateManager* order_state_manager_;
         const RestClient rest_client_;
         const ProductTable& products_;
-        SpscRing<OMSEvent, 256>* reconcile_ring_;
+        SpscRing<OMSEvent, OMS_RING_SIZE>* reconcile_ring_;
 }

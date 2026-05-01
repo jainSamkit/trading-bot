@@ -1,5 +1,6 @@
 #pragma once
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
 #include "delta_exchange/oms_ws_client.hpp"
 #include "delta_exchange/rest_client.hpp"
 #include "delta_exchange/sessions/types.hpp"
@@ -30,19 +31,21 @@ concept IsRestClient = std::derived_from<U, TcpClient>;
 
 template<IsOMSWebSocketClient WSClient, IsRestClient RestClient = DeltaRestClient>
 class OmsProcess {
+    static constexpr size_t OMS_RING_SIZE = cfg::OMS_RING_SIZE;
+    
 public:
 OmsProcess(const ProductTable& products, const OMSConfig& cfg)
         : products_(products), cfg_(cfg)
     {
-        oms_rest_ring_         = std::make_unique<SpscRing<OMSEvent, 256>>();
-        oms_ws_ring_           = std::make_unique<SpscRing<OMSEvent, 256>>();
-        oms_reconcile_ring_    = std::make_unique<SpscRing<OMSEvent, 256>>();
+        oms_rest_ring_         = std::make_unique<SpscRing<OMSEvent, OMS_RING_SIZE>>();
+        oms_ws_ring_           = std::make_unique<SpscRing<OMSEvent, OMS_RING_SIZE>>();
+        oms_reconcile_ring_    = std::make_unique<SpscRing<OMSEvent, OMS_RING_SIZE>>();
         ws_client_             = std::make_unique<WSClient>(
             cfg_.host.c_str(), cfg_.port, cfg_.path.c_str(),
             cfg_.api_key.c_str(), cfg_.api_secret.c_str(),
             products_, oms_ws_ring_.get());
-        oms_manager_           = std::make_unique<OrderStateManager>(
-            oms_ws_ring_.get(), oms_rest_ring_.get(), oms_reconcile_ring_.get(), products_);
+
+            oms_manager_  = std::make_unique<OrderStateManager>(oms_ws_ring_.get(), oms_rest_ring_.get(), oms_reconcile_ring_.get(), products_);
     }
 
     void start() {
@@ -91,11 +94,11 @@ private:
     std::atomic<bool>   running_{false};
     std::atomic<bool>   stopped_{false};
 
-    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_ws_ring_;
-    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_rest_ring_;
-    std::unique_ptr<SpscRing<OMSEvent, 256>>  oms_reconcile_ring_;
-    std::unique_ptr<WSClient>                 ws_client_;
-    std::unique_ptr<OrderStateManager>        oms_manager_;
-    std::thread                               oms_manager_thread_;
-    std::thread                               oms_ws_client_thread_;
+    std::unique_ptr<SpscRing<OMSEvent, OMS_RING_SIZE>>  oms_ws_ring_;
+    std::unique_ptr<SpscRing<OMSEvent, OMS_RING_SIZE>>  oms_rest_ring_;
+    std::unique_ptr<SpscRing<OMSEvent, OMS_RING_SIZE>>  oms_reconcile_ring_;
+    std::unique_ptr<WSClient>                           ws_client_;
+    std::unique_ptr<OrderStateManager>                  oms_manager_;
+    std::thread                                         oms_manager_thread_;
+    std::thread                                         oms_ws_client_thread_;
 };

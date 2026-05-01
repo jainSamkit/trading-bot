@@ -51,8 +51,8 @@ public:
         uint8_t count = 0;
 
         for (auto level : arr) {
-            if (count >= MAX_LEVELS) break;
-
+            if (count >= MAX_FEED_LEVELS) break;
+            
             simdjson::ondemand::array pair;
             if (level.get_array().get(pair)) continue;
 
@@ -68,9 +68,8 @@ public:
             std::string_view size_str;
             if ((*it).get_string().get(size_str)) continue;
 
-
-            levels[count].price = toDouble(price_str);
-            levels[count].size  = toDouble(size_str);
+            levels[count].price  = toDouble(price_str);
+            levels[count].size   = toDouble(size_str);
 
             count++;
         }
@@ -80,7 +79,8 @@ public:
     void onMessage(std::string_view msg) {
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::L2Feed;
-        slot->l2   = L2Update{};   // reset stale ring slot state
+        auto& l2_slot = slot->l2;
+        l2_slot   = L2Update{};   // reset stale ring slot state
 
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
@@ -98,27 +98,26 @@ public:
                 std::string_view action;
                 if (field.value().get_string().get(action)) continue;
                 raw_action = action;
-                (*slot).l2.isSnapshot = (action != "update");
+                l2_slot.isSnapshot = (action != "update");
             } else if (key == "a") {
-                (*slot).l2.ask_count = parseLevels(field.value(), (*slot).l2.asks);
+                l2_slot.ask_count = parseLevels(field.value(), l2_slot.asks);
             } else if (key == "b") {
-                (*slot).l2.bid_count = parseLevels(field.value(), (*slot).l2.bids);
+                l2_slot.bid_count = parseLevels(field.value(), l2_slot.bids);
             } else if (key == "seq") {
-                if (field.value().get_uint64().get((*slot).l2.sequence_no)) return;
+                if (field.value().get_uint64().get(l2_slot.sequence_no)) return;
             } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
-                (*slot).l2.instrument_id = client_.products_.idfromSymbol(symbol);
+                l2_slot.instrument_id = client_.products_.idfromSymbol(symbol);
             } else if (key == "ts") {
-                if(field.value().get_uint64().get((*slot).l2.timestamp)) {};
+                if(field.value().get_uint64().get(l2_slot.timestamp)) {};
             }
         }
 
-        if ((*slot).l2.instrument_id == UINT8_MAX)
-            return;
+        if (l2_slot.instrument_id == UINT8_MAX) return;
 
-        const Product& product = client_.products_[(*slot).l2.instrument_id];
-        convertToTick(slot->l2, product);
+    // const Product& product = client_.products_[l2_slot.instrument_id];
+        // convertToTick(slot->l2, product);
 
         // const L2Update& u = slot->l2;
         // std::cout << "L2Update{"
@@ -133,30 +132,30 @@ public:
         //     std::cout << " [" << u.bids[i].price << "," << u.bids[i].size << "]";
         // std::cout << " }\n";
 
-        uint8_t id = (*slot).l2.instrument_id;
+        uint8_t id = l2_slot.instrument_id;
         if (!book_valid_[id]) {
-            seq_no_[id]    = (*slot).l2.sequence_no;
+            seq_no_[id]    = l2_slot.sequence_no;
             book_valid_[id] = true;
-            (*slot).l2.isSnapshot = true;
+            l2_slot.isSnapshot = true;
         } else {
-            if (seq_no_[id] + 1 != (*slot).l2.sequence_no) {
+            if (seq_no_[id] + 1 != l2_slot.sequence_no) {
                 std::cerr << "[l2] seq gap: expected " << seq_no_[id] + 1
-                          << " got " << (*slot).l2.sequence_no << " — dropping\n";
+                          << " got " << l2_slot.sequence_no << " — dropping\n";
                 book_valid_[id] = false;
                 seq_no_[id]    = 0;
                 return;
             }
-            seq_no_[id] = (*slot).l2.sequence_no;
-            (*slot).l2.isSnapshot = false;
+            seq_no_[id] = l2_slot.sequence_no;
+            l2_slot.isSnapshot = false;
         }
 
         slot->t_kernel = parser_.t_kernel;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
-        (*slot).instrument_id = (*slot).l2.instrument_id;
+        slot->instrument_id = l2_slot.instrument_id;
         client_.commit_to_ring();
         // const int64_t t_parse = now_ns();
-        // std::cout << (*slot).l2
+        // std::cout << l2_slot
         //           << " recv_to_frame_ns="  << (parser_.t_frame - parser_.t_kernel)
         //           << " frame_to_parse_ns=" << (t_parse         - parser_.t_frame)
         //           << " total_ns="          << (t_parse         - parser_.t_kernel)
@@ -195,8 +194,7 @@ public:
     uint64_t seqNo(uint8_t id) const { return seq_no_[id]; }
 
 private:
-    static constexpr uint8_t MAX_LEVELS = MAX_FEED_LEVELS;
     std::string channel_{"ob_updates"};
-    uint64_t    seq_no_[ProductTable::MAX_INSTRUMENTS]{};
-    bool        book_valid_[ProductTable::MAX_INSTRUMENTS]{};
+    uint64_t    seq_no_[MAX_INSTRUMENTS]{};
+    bool        book_valid_[MAX_INSTRUMENTS]{};
 };

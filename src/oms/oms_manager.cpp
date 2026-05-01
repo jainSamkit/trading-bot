@@ -9,9 +9,9 @@
 // ─── lifecycle ────────────────────────────────────────────────────────────────
 
 OrderStateManager::OrderStateManager(
-    SpscRing<OMSEvent, 256>* const oms_ws_ring,
-    SpscRing<OMSEvent, 256>* const oms_rest_ring,
-    SpscRing<OMSEvent, 256>* const oms_reconcile_ring,
+    SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_ws_ring,
+    SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_rest_ring,
+    SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_reconcile_ring,
     const ProductTable& products,
     const char* audit_path)
     : products_(products)

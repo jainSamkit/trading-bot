@@ -14,7 +14,7 @@ enum class SessionID : uint16_t {
     Mark,
     Spot,
     OHLC,
-    Ticker,
+    Trade,
     Order,
     Position,
     Fill,

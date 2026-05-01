@@ -12,17 +12,20 @@
 #include "delta_exchange/models/product.hpp"
 #include "delta_exchange/sessions/types.hpp"
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
 
 class L2UpdateSession;
-class TickerSession;
+class TradeSession;
 class MarkSession;
 class SpotSession;
-class OHLCSession;
+// class OHLCSession;
 
 class DeltaWebsocketClient : public WebSocketClient<DeltaWebsocketClient> {
+    static constexpr size_t FEED_RING_SIZE = cfg::FEED_RING_SIZE;
+    
 public:
     DeltaWebsocketClient(const char* host, int port, const char* path,
-                         const ProductTable& products, SpscRing<FeedMessage,4096>* const ring, const ProductGroup& product_groups);
+                         const ProductTable& products, SpscRing<FeedMessage,FEED_RING_SIZE>* const ring, const ProductGroup& product_groups);
 
     ~DeltaWebsocketClient();
 
@@ -67,12 +70,12 @@ protected:
     simdjson::ondemand::parser feed_parser_;
 
 private:
-    std::unique_ptr<L2UpdateSession>        l2UpdateSession_;
-    std::unique_ptr<TickerSession>          tickerSession_;
-    std::unique_ptr<MarkSession>            markSession_;
-    std::unique_ptr<SpotSession>            spotSession_;
-    std::unique_ptr<OHLCSession>            ohlcSession_;
-    SpscRing<FeedMessage, 4096>* const      ring_;
+    std::unique_ptr<L2UpdateSession>                    l2UpdateSession_;
+    std::unique_ptr<TradeSession>                       tradeSession_;
+    std::unique_ptr<MarkSession>                        markSession_;
+    std::unique_ptr<SpotSession>                        spotSession_;
+    // std::unique_ptr<OHLCSession>            ohlcSession_;
+    SpscRing<FeedMessage, FEED_RING_SIZE>* const        ring_;
 
     bool shutdown_ = false;
     EpollSlot eventFDSlot;
@@ -80,6 +83,6 @@ private:
 
 #include "delta_exchange/sessions/l2.hpp"
 #include "delta_exchange/sessions/mark.hpp"
-#include "delta_exchange/sessions/ticker.hpp"
+#include "delta_exchange/sessions/trade.hpp"
 #include "delta_exchange/sessions/spot.hpp"
-#include "delta_exchange/sessions/ohlc.hpp"
+// #include "delta_exchange/sessions/ohlc.hpp"

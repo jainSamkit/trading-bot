@@ -6,6 +6,7 @@
 #include "delta_exchange/models/fill.hpp"
 #include "delta_exchange/models/wallet.hpp"
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -66,11 +67,11 @@ struct OMSEvent {
 
 struct OMSState {
     Wallet                                                              wallet_;
-    std::array<MemoryPool<Order, 64>, ProductTable::MAX_INSTRUMENTS>    bids_;
-    std::array<MemoryPool<Order, 64>, ProductTable::MAX_INSTRUMENTS>    asks_;
-    std::array<MemoryPool<Order, 64>, ProductTable::MAX_INSTRUMENTS>    stop_orders_;
+    std::array<MemoryPool<Order, 64>, cfg::MAX_INSTRUMENTS>    bids_;
+    std::array<MemoryPool<Order, 64>, cfg::MAX_INSTRUMENTS>    asks_;
+    std::array<MemoryPool<Order, 64>, cfg::MAX_INSTRUMENTS>    stop_orders_;
 
-    std::array<Position, ProductTable::MAX_INSTRUMENTS>                 positions_;
+    std::array<Position, cfg::MAX_INSTRUMENTS>                 positions_;
 
     std::unordered_map<uint64_t, Order*>                                exchange_id_order_map;
     std::unordered_map<uint64_t, Order*>                                client_id_order_map;
@@ -78,10 +79,10 @@ struct OMSState {
     std::unordered_map<uint64_t, Order*>                                exchange_id_stop_order_map;
     std::unordered_map<uint64_t, Order*>                                client_id_stop_order_map;
 
-    std::array<uint32_t, ProductTable::MAX_INSTRUMENTS>                 open_buy_contracts_{};
-    std::array<uint32_t, ProductTable::MAX_INSTRUMENTS>                 open_sell_contracts_{};                                                                                                                                             
-    std::array<double,   ProductTable::MAX_INSTRUMENTS>                 open_buy_notional_{};                                                                                                                                                                  
-    std::array<double,   ProductTable::MAX_INSTRUMENTS>                 open_sell_notional_{};
+    std::array<uint32_t, cfg::MAX_INSTRUMENTS>                 open_buy_contracts_{};
+    std::array<uint32_t, cfg::MAX_INSTRUMENTS>                 open_sell_contracts_{};                                                                                                                                             
+    std::array<double,   cfg::MAX_INSTRUMENTS>                 open_buy_notional_{};                                                                                                                                                                  
+    std::array<double,   cfg::MAX_INSTRUMENTS>                 open_sell_notional_{};
 
     std::atomic<ChannelState> orders_state_    {ChannelState::Invalid};
     std::atomic<ChannelState> positions_state_ {ChannelState::Invalid};
@@ -90,12 +91,14 @@ struct OMSState {
 
 
 class OrderStateManager {
+
+    static constexpr size_t OMS_RING_SIZE = cfg::OMS_RING_SIZE;
 public:
 
     explicit OrderStateManager(
-        SpscRing<OMSEvent, 256>* const oms_ws_ring,
-        SpscRing<OMSEvent, 256>* const oms_rest_ring,
-        SpscRing<OMSEvent, 256>* const oms_reconcile_ring,
+        SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_ws_ring,
+        SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_rest_ring,
+        SpscRing<OMSEvent, OMS_RING_SIZE>* const oms_reconcile_ring,
         const ProductTable& products,
         const char* audit_path = "oms_audit.log");
 
@@ -143,8 +146,8 @@ private:
 
     const ProductTable&      products_;
     OMSState                 state_;
-    SpscRing<OMSEvent, 256>* oms_ws_ring_;
-    SpscRing<OMSEvent, 256>* oms_rest_ring_;
-    SpscRing<OMSEvent, 256>* oms_reconcile_ring_;
+    SpscRing<OMSEvent, OMS_RING_SIZE>* oms_ws_ring_;
+    SpscRing<OMSEvent, OMS_RING_SIZE>* oms_rest_ring_;
+    SpscRing<OMSEvent, OMS_RING_SIZE>* oms_reconcile_ring_;
     FILE*                    audit_ = nullptr;
 };

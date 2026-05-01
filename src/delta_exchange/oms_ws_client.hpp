@@ -15,6 +15,7 @@
 #include "delta_exchange/models/product.hpp"
 #include "delta_exchange/sessions/types.hpp"
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
 #include "oms/oms_manager.hpp"
 
 class OrderSession;
@@ -22,9 +23,11 @@ class PositionFillSession;
 class WalletSession;
 
 class DeltaOMSWebsocketClient : public WebSocketClient<DeltaOMSWebsocketClient> {
+
+    static constexpr size_t OMS_RING_SIZE = cfg::OMS_RING_SIZE;
 public:
     DeltaOMSWebsocketClient(const char* host, int port, const char* path, const char* api_key, const char* api_secret,
-                         const ProductTable& products, SpscRing<OMSEvent, 256>* const ring);
+                         const ProductTable& products, SpscRing<OMSEvent, OMS_RING_SIZE>* const ring);
 
     ~DeltaOMSWebsocketClient();
 
@@ -77,10 +80,10 @@ protected:
     simdjson::ondemand::parser oms_parser_;
 
 private:
-    std::unique_ptr<OrderSession>        orderSession_;
-    std::unique_ptr<PositionFillSession> positionFillSession_;
-    std::unique_ptr<WalletSession>       walletSession_;
-    SpscRing<OMSEvent, 256>* const       ring_;   // fixed: was 4096, constructor takes 256
+    std::unique_ptr<OrderSession>                   orderSession_;
+    std::unique_ptr<PositionFillSession>            positionFillSession_;
+    std::unique_ptr<WalletSession>                  walletSession_;
+    SpscRing<OMSEvent, OMS_RING_SIZE>* const        ring_;   // fixed: was 4096, constructor takes 256
 
     bool      shutdown_ = false;
     EpollSlot eventFDSlot;

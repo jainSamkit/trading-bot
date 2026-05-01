@@ -6,22 +6,24 @@
 #include "execution/execution_manager.hpp"
 #include "oms/oms_manager.hpp"
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
 #include <string>
 
 class DeltaRestClient : public TcpClient {
+    static constexpr size_t OMS_RING_SIZE = cfg::OMS_RING_SIZE;
 public:
     DeltaRestClient(const char* host, const char* api_key, const char* api_secret,
                     const ProductTable& products);
 
     // execution — called by ExecutionManager via jump table
-    void create_order      (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void edit_order        (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void cancel_order      (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void cancel_all_orders (const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void close_all_positions(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring);
-    void reconcile_open_orders    (SpscRing<OMSEvent, 256>* ring);
-    void reconcile_open_positions (SpscRing<OMSEvent, 256>* ring);
-    void reconcile_wallet         (SpscRing<OMSEvent, 256>* ring);
+    void create_order      (const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void edit_order        (const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void cancel_order      (const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void cancel_all_orders (const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void close_all_positions(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void reconcile_open_orders    (SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void reconcile_open_positions (SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
+    void reconcile_wallet         (SpscRing<OMSEvent, OMS_RING_SIZE>* ring);
 
     // reconcile / init fetches
     httplib::Result get_products (const std::string& query = "");

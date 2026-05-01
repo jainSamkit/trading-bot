@@ -2,6 +2,9 @@
 #include "delta_exchange/sessions/types.hpp"
 #include "delta_exchange/models/product.hpp"
 #include <charconv>
+#include<iostream>
+using namespace std;
+
 
 class SpotSession : public Session<SpotSession, DeltaWebsocketClient> {
 public:
@@ -19,6 +22,8 @@ public:
         // std::cout<<"[raw msg]: "<<msg<<'\n';
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::SpotPrice;
+        auto& spot_price_slot = slot->spot_price_data;
+        spot_price_slot = SpotPriceData{};
 
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
@@ -32,22 +37,20 @@ public:
             if (key == "p") {
                 double price = 0.0;
                 if (field.value().get_double().get(price)) continue;
-                (*slot).spot_price.price = price;
-            } else if (key == "ts") {
-                if (field.value().get_uint64().get((*slot).mark_price.timestamp)) {}  // was: (*slot).l2.timestamp
+                spot_price_slot.price = price;
             } else if (key == "sy") {
                 std::string_view index_symbol;
                 if (field.value().get_string().get(index_symbol)) return;
-                (*slot).spot_price.instrument_id = client_.products_.idfromIndexSymbol(index_symbol);
+                spot_price_slot.instrument_id = client_.products_.idfromIndexSymbol(index_symbol);
             }
         }
 
-        if ((*slot).spot_price.instrument_id == UINT8_MAX) return;
+        if (spot_price_slot.instrument_id == UINT8_MAX) return;
 
         slot->t_kernel = parser_.t_kernel;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
-        (*slot).instrument_id = (*slot).spot_price.instrument_id;
+        slot->instrument_id = spot_price_slot.instrument_id;
         client_.commit_to_ring();
     }
 

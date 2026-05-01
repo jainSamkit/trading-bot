@@ -2,14 +2,14 @@
 
 DeltaWebsocketClient::DeltaWebsocketClient(
     const char* host, int port, const char* path,
-    const ProductTable& products, SpscRing<FeedMessage, 4096>* const ring, const ProductGroup& product_groups)
+    const ProductTable& products, SpscRing<FeedMessage, FEED_RING_SIZE>* const ring, const ProductGroup& product_groups)
     : products_(products)
     , product_groups_(product_groups)
     , l2UpdateSession_(std::make_unique<L2UpdateSession>(*this, SessionID::L2Update))
-    , tickerSession_(std::make_unique<TickerSession>(*this, SessionID::Ticker))
+    , tradeSession_(std::make_unique<TradeSession>(*this, SessionID::Trade))
     , markSession_(std::make_unique<MarkSession>(*this, SessionID::Mark))
     , spotSession_(std::make_unique<SpotSession>(*this, SessionID::Spot))
-    , ohlcSession_(std::make_unique<OHLCSession>(*this, SessionID::OHLC))
+    // , ohlcSession_(std::make_unique<OHLCSession>(*this, SessionID::OHLC))
     , ring_(ring)
 {
     WebSocketClient::host = host ? host : "";
@@ -55,12 +55,15 @@ void DeltaWebsocketClient::start() {
     if (!l2UpdateSession_->init())return;
     if (!markSession_->init())return;
     if (!spotSession_->init()) return;
-    if (!ohlcSession_->init()) return;
+    // if (!ohlcSession_->init()) return;
+    if (!tradeSession_->init()) return;
 
     l2UpdateSession_->start();
     markSession_->start();
     spotSession_->start();
-    ohlcSession_->start();
+    // ohlcSession_->start();
+    tradeSession_->start();
+
 
     run_loop(static_cast<DeltaWebsocketClient*>(this));
 }
@@ -71,10 +74,10 @@ void DeltaWebsocketClient::shutdownReactor() {
     shutdown_ = true;
 
     l2UpdateSession_->destroy();
-    tickerSession_->destroy();
+    tradeSession_->destroy();
     markSession_->destroy();
     spotSession_->destroy();
-    ohlcSession_->destroy();
+    // ohlcSession_->destroy();
 
     if (efd_ >= 0) {
         epoll_ctl(epfd_, EPOLL_CTL_DEL, efd_, nullptr);

@@ -22,7 +22,7 @@ static uint64_t now_us() {
             std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
-void DeltaRestClient::create_order(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::create_order(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto req      = CreateOrderRequest::from_intent(intent.create_order_intent);
     auto body     = req.serialize();
     LOG_INFO("rest", "create_order body: %s", body.c_str());
@@ -41,7 +41,7 @@ void DeltaRestClient::create_order(const ExecutionIntent& intent, SpscRing<OMSEv
     ring->push_commit();
 }
 
-void DeltaRestClient::edit_order(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::edit_order(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto req      = EditOrderRequest::from_intent(intent.edit_order_intent);
     auto body     = req.serialize();
     LOG_INFO("rest", "edit_order body: %s", body.c_str());
@@ -60,7 +60,7 @@ void DeltaRestClient::edit_order(const ExecutionIntent& intent, SpscRing<OMSEven
     ring->push_commit();
 }
 
-void DeltaRestClient::cancel_order(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::cancel_order(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto req      = CancelOrderRequest::from_intent(intent.cancel_order_intent);
     auto body     = req.serialize();
     LOG_INFO("rest", "cancel_order body: %s", body.c_str());
@@ -79,7 +79,7 @@ void DeltaRestClient::cancel_order(const ExecutionIntent& intent, SpscRing<OMSEv
     ring->push_commit();
 }
 
-void DeltaRestClient::cancel_all_orders(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::cancel_all_orders(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto req    = CancelAllOrderRequest::from_intent(intent.cancel_all_order_intent);
     auto body   = req.serialize();
     auto result = cancel_all_orders_http(body);
@@ -88,7 +88,7 @@ void DeltaRestClient::cancel_all_orders(const ExecutionIntent& intent, SpscRing<
     (void)CancelAllOrderRequest::parse_success(result->body);
 }
 
-void DeltaRestClient::close_all_positions(const ExecutionIntent& intent, SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::close_all_positions(const ExecutionIntent& intent, SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto req    = CloseAllPositionsRequest::from_intent(intent.close_all_positions_intent);
     auto body   = req.serialize();
     LOG_INFO("rest", "close_all_positions body: %s", body.c_str());
@@ -98,7 +98,7 @@ void DeltaRestClient::close_all_positions(const ExecutionIntent& intent, SpscRin
     (void)CloseAllPositionsRequest::parse_success(result->body);
 }
 
-void DeltaRestClient::reconcile_open_orders(SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::reconcile_open_orders(SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     static constexpr int PAGE_SIZE = 30;
     OMSEvent page_buf[PAGE_SIZE];
 
@@ -126,7 +126,7 @@ void DeltaRestClient::reconcile_open_orders(SpscRing<OMSEvent, 256>* ring) {
     }
 }
 
-void DeltaRestClient::reconcile_open_positions(SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::reconcile_open_positions(SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     static constexpr int MAX_POSITIONS = ProductTable::MAX_INSTRUMENTS;
     OMSEvent buf[MAX_POSITIONS];
 
@@ -145,7 +145,7 @@ void DeltaRestClient::reconcile_open_positions(SpscRing<OMSEvent, 256>* ring) {
     }
 }
 
-void DeltaRestClient::reconcile_wallet(SpscRing<OMSEvent, 256>* ring) {
+void DeltaRestClient::reconcile_wallet(SpscRing<OMSEvent, OMS_RING_SIZE>* ring) {
     auto result = get_wallet();
     if (!result || result->status != 200) return;
 

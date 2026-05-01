@@ -2,7 +2,7 @@
 
 DeltaOMSWebsocketClient::DeltaOMSWebsocketClient(
     const char* host, int port, const char* path, const char* api_key, const char* api_secret,
-    const ProductTable& products, SpscRing<OMSEvent, 256>* const ring)
+    const ProductTable& products, SpscRing<OMSEvent, OMS_RING_SIZE>* const ring)
     : products_(products)
     , api_key_(api_key ? api_key : "")
     , api_secret_(api_secret ? api_secret : "")

@@ -16,6 +16,7 @@ public:
         FeedMessage* slot = client_.get_ring_slot();
         slot->type = FeedMessage::Type::OHLC;
 
+        auto& ohlc_slot = slot->ohlc;
         simdjson::ondemand::parser& parser = client_.get_parser();
         auto result = parser.iterate(msg.data(), msg.size(),
                                      msg.size() + simdjson::SIMDJSON_PADDING);
@@ -28,37 +29,37 @@ public:
             std::string_view key;
             if (field.unescaped_key().get(key)) continue;
             if (key == "candle_start_time") {
-                if (field.value().get_uint64().get((*slot).ohlc.start_time)) return;
+                if (field.value().get_uint64().get(ohlc_slot.start_time)) return;
             } else if (key == "c") {
-                if (field.value().get_double().get((*slot).ohlc.close)) return;
+                if (field.value().get_double().get(ohlc_slot.close)) return;
             } else if(key == "h") {
-                if (field.value().get_double().get((*slot).ohlc.high)) return;
+                if (field.value().get_double().get(ohlc_slot.high)) return;
             } else if(key == "l") {
-                if (field.value().get_double().get((*slot).ohlc.low)) return;
+                if (field.value().get_double().get(ohlc_slot.low)) return;
         } else if(key == "o") {
-                if (field.value().get_double().get((*slot).ohlc.open)) return;
+                if (field.value().get_double().get(ohlc_slot.open)) return;
             } else if(key == "res") {
                 std::string_view res;
                 if (field.value().get_string().get(res)) return;
                 auto it = std::find(ohlc_resolutions.begin(), ohlc_resolutions.end(), res);
                 if (it == ohlc_resolutions.end()) return;
-                (*slot).ohlc.res_idx = static_cast<uint8_t>(it - ohlc_resolutions.begin());
+                ohlc_slot.res_idx = static_cast<uint8_t>(it - ohlc_resolutions.begin());
             } else if (key == "sy") {
                 std::string_view symbol;
                 if (field.value().get_string().get(symbol)) return;
                 if (symbol.starts_with("MARK:")) {
-                    (*slot).ohlc.is_mark = true;
+                    ohlc_slot.is_mark = true;
                     symbol.remove_prefix(5);
                 } else {
-                    (*slot).ohlc.is_mark = false;
+                    ohlc_slot.is_mark = false;
                 }
 
-                (*slot).instrument_id = client_.products_.idfromSymbol(symbol);
-                if((*slot).instrument_id == UINT8_MAX) return;
+                slot->instrument_id = client_.products_.idfromSymbol(symbol);
+                if(slot->instrument_id == UINT8_MAX) return;
             } else if (key =="ts") {
-                if (field.value().get_uint64().get((*slot).ohlc.timestamp)) {};
+                if (field.value().get_uint64().get(ohlc_slot.timestamp)) {};
             } else if(key == "v") {
-                if (field.value().get_double().get((*slot).ohlc.volume)) {};
+                if (field.value().get_double().get(ohlc_slot.volume)) {};
             } else if(key == "type") {
                 if (field.value().get_string().get(msg_type)) {};
                 if(msg_type == "subscriptions") return;

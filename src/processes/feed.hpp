@@ -1,5 +1,8 @@
 #pragma once
 #include "core/spsc_ring.hpp"
+#include "core/spmc_ring.hpp"
+#include "config/config.hpp"
+#include "core/snapshots.hpp"
 #include "delta_exchange/ws_client.hpp"
 #include "delta_exchange/sessions/types.hpp"
 #include "ipc/shared_state.hpp"
@@ -24,13 +27,14 @@ concept IsWebSocketClient = std::derived_from<T, WebSocketClient<T>>;
 
 template<IsWebSocketClient Client>
 class FeedProcess {
-
+    static constexpr size_t FEED_RING_SIZE = cfg::FEED_RING_SIZE;
+    
 public:
     FeedProcess(const ProductTable& products,
                 const ProductGroup& product_group,
-                SharedState*        state,
+                SharedState* const  shared_state,
                 const FeedConfig&   cfg)
-        : state_(state), products_(products),
+        : shared_state_(shared_state), products_(products),
           product_group_(product_group), cfg_(cfg) {}
 
     void start() {
@@ -42,11 +46,12 @@ public:
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
 
-        feedRing_ = std::make_unique<SpscRing<FeedMessage, 4096>>();
+        feedRing_ = std::make_unique<SpscRing<FeedMessage, FEED_RING_SIZE>>();
+
         client_   = std::make_unique<Client>(cfg_.host.c_str(), cfg_.port,
                                              cfg_.path.c_str(), products_,
                                              feedRing_.get(), product_group_);
-        market_   = std::make_unique<MarketState>(feedRing_.get(), products_, product_group_);
+        market_   = std::make_unique<MarketState>(feedRing_.get(), shared_state_, products_, product_group_);
         market_thread_ = std::thread(&MarketState::run, market_.get(), std::ref(running_));
         client_->start();
     }
@@ -73,17 +78,17 @@ private:
             instance_for_shutdown_signal_->stop();
     }
 
-    inline static volatile sig_atomic_t shutdown_signal_seen_ = 0;
-    inline static FeedProcess*          instance_for_shutdown_signal_ = nullptr;
-    SharedState*                                 state_;
-    const ProductTable&                          products_;
-    const ProductGroup&                          product_group_;
-    const FeedConfig&                            cfg_;
-    std::atomic<bool>                            running_{true};
-    std::atomic<bool>                            stopped_{false};
+    inline static volatile sig_atomic_t             shutdown_signal_seen_ = 0;
+    inline static FeedProcess*                      instance_for_shutdown_signal_ = nullptr;
+    SharedState* const                              shared_state_;
+    const ProductTable&                             products_;
+    const ProductGroup&                             product_group_;
+    const FeedConfig&                               cfg_;
+    std::atomic<bool>                               running_{true};
+    std::atomic<bool>                               stopped_{false};
 
-    std::unique_ptr<SpscRing<FeedMessage, 4096>> feedRing_;
-    std::unique_ptr<Client>                      client_;
-    std::unique_ptr<MarketState>                 market_;
-    std::thread                                  market_thread_;
+    std::unique_ptr<SpscRing<FeedMessage, FEED_RING_SIZE>>    feedRing_;
+    std::unique_ptr<Client>                         client_;
+    std::unique_ptr<MarketState>                    market_;
+    std::thread                                     market_thread_;
 };

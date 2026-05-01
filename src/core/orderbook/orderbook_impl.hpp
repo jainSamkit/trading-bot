@@ -5,138 +5,116 @@
 #include "orderbook.hpp"
 
 // ── Deferred initialisation ──────────────────────────────────────────────────
-
-template <uint8_t Depth>
-void OrderBook<Depth>::init(uint8_t const product_id,
-                            double        lower_bound_price,
-                            double        upper_bound_price,
-                            double        tick_width)
-{
-    assert(upper_bound_price > lower_bound_price && "need upper > lower");
-    assert(tick_width > 0.0 && "tick_width must be positive");
-
-    product_id_           = product_id;
-    lower_bound_          = lower_bound_price;
-    upper_bound_          = upper_bound_price;
-    tick_width_           = tick_width;
-    num_levels_           = static_cast<uint32_t>(
-        std::llround((upper_bound_price - lower_bound_price) / tick_width) + 1);
-    best_bid_tick_        = -1;
-    best_ask_tick_        = -1;
-    bid_ladder_tail_tick_ = -1;
-    ask_ladder_tail_tick_ = -1;
-    bid_ladder_filled_    = 0;
-    ask_ladder_filled_    = 0;
-
-    bid_qty_.assign(num_levels_, 0);
-    ask_qty_.assign(num_levels_, 0);
-
-    assert(num_levels_ >= 2);
-}
-
-template <uint8_t Depth>
-double OrderBook<Depth>::priceFromTick(uint32_t tick) const
-{
-    assert(inRangeTick(tick));
-    return lower_bound_ + static_cast<double>(tick) * tick_width_;
+inline void OrderBook::init(const uint8_t product_id, Tick min_tick, Tick max_tick, const Product&  product)
+{   
+    assert(max_tick > min_tick && "need max_tick > min_tick");
+    product_id_ = product_id;
+    product_ = &product;
+    num_ticks_ = to_int(max_tick-min_tick+Tick{1});
+    min_tick_ = min_tick;
+    max_tick_ = max_tick;
+    best_bid_tick_ = Tick{-1};
+    best_ask_tick_ = Tick{-1};
+    bid_ladder_tail_tick_ = Tick{-1};
+    ask_ladder_tail_tick_ = Tick{-1};
+    bid_ladder_filled_ = 0;
+    ask_ladder_filled_ = 0;
+    bid_qty_per_tick_ = std::make_unique<Contracts[]>(num_ticks_);
+    ask_qty_per_tick_ = std::make_unique<Contracts[]>(num_ticks_);
+    market_snapshot_ = {};
 }
 
 // ── Incremental side updates ─────────────────────────────────────────────────
 // Only rescan when the deleted level was the current best.
 
-template <uint8_t Depth>
-void OrderBook<Depth>::applyBidTick(uint32_t tick, uint64_t size)
+inline void OrderBook::applyBidTick(Tick tick, Contracts size)
 {
     assert(inRangeTick(tick));
-    bid_qty_[tick] = size;
+    bid_qty_per_tick_[to_int(tick)] = size;
 
-    if (size == 0) {
-        if (best_bid_tick_ == static_cast<int32_t>(tick)) {
-            int32_t i = static_cast<int32_t>(tick) - 1;
-            while (i >= 0 && bid_qty_[static_cast<uint32_t>(i)] == 0)
+    if (size == Contracts{0}) {
+        if (best_bid_tick_ == tick) {
+            int32_t i = to_int(tick) - 1;
+            while (i >= 0 && bid_qty_per_tick_[i] == Contracts{0})
                 --i;
-            best_bid_tick_ = i;
+            best_bid_tick_ = Tick{i};
         }
     } else {
-        if (best_bid_tick_ < 0 || static_cast<int32_t>(tick) > best_bid_tick_)
-            best_bid_tick_ = static_cast<int32_t>(tick);
+        if (best_bid_tick_ < Tick{0} || tick > best_bid_tick_) best_bid_tick_ = tick;
     }
 }
 
-template <uint8_t Depth>
-void OrderBook<Depth>::applyAskTick(uint32_t tick, uint64_t size)
+inline void OrderBook::applyAskTick(Tick tick, Contracts size)
 {
     assert(inRangeTick(tick));
-    ask_qty_[tick] = size;
+    ask_qty_per_tick_[to_int(tick)] = size;
 
-    if (size == 0) {
-        if (best_ask_tick_ == static_cast<int32_t>(tick)) {
-            int32_t i = static_cast<int32_t>(tick) + 1;
-            while (static_cast<uint32_t>(i) < num_levels_ && ask_qty_[static_cast<uint32_t>(i)] == 0)
+    if (size == Contracts{0}) {
+        if (best_ask_tick_ == tick) {
+            int32_t i = to_int(tick) + 1;
+            while (i <= to_int(max_tick_) && ask_qty_per_tick_[i] == Contracts{0})
                 ++i;
-            if (static_cast<uint32_t>(i) >= num_levels_)
-                best_ask_tick_ = -1;
+            if (i > to_int(max_tick_))
+                best_ask_tick_ = Tick{-1};
             else
-                best_ask_tick_ = i;
+                best_ask_tick_ = Tick{i};
         }
     } else {
-        if (best_ask_tick_ < 0 || static_cast<int32_t>(tick) < best_ask_tick_)
-            best_ask_tick_ = static_cast<int32_t>(tick);
+        if (best_ask_tick_ < Tick{0} || tick < best_ask_tick_) best_ask_tick_ = tick;
     }
 }
 
 // ── Top-of-book ladders ─────────────────────────────────────────────────────
 
-template <uint8_t Depth>
-void OrderBook<Depth>::refillBidLadder()
+inline void OrderBook::refillBidLadder()
 {
-    uint8_t n         = 0;
-    int32_t tail_tick = -1;
-
-    for (int32_t i = best_bid_tick_; i >= 0 && n < Depth; --i) {
-        uint32_t const ui = static_cast<uint32_t>(i);
-        uint64_t const q  = bid_qty_[ui];
-        if (q != 0) {
-            bid_[n].tick     = ui;
-            bid_[n].size = q;
-            tail_tick = static_cast<int32_t>(ui);
+    uint8_t n = 0;
+    Tick tail_tick {-1};
+    
+    for (int32_t i = to_int(best_bid_tick_); i >= 0 && n < Depth; --i) {
+        const Tick t = Tick{i};
+        const Contracts q  = bid_qty_per_tick_[i];
+        if (q != Contracts{0}) {
+            market_snapshot_.bids[n].tick = t;
+            market_snapshot_.bids[n].size = q;
+            tail_tick = t;
             ++n;
         }
     }
 
     uint8_t const filled = n;
     for (; n < Depth; ++n) {
-        bid_[n].tick     = 0;
-        bid_[n].size = 0;
+        market_snapshot_.bids[n].tick = {};
+        market_snapshot_.bids[n].size = {};
     }
 
     bid_ladder_filled_    = filled;
     bid_ladder_tail_tick_ = tail_tick;
 }
 
-template <uint8_t Depth>
-void OrderBook<Depth>::refillAskLadder()
-{
-    uint8_t n         = 0;
-    int32_t tail_tick = -1;
 
-    for (int32_t i = best_ask_tick_;
-         i >= 0 && static_cast<uint32_t>(i) < num_levels_ && n < Depth;
+inline void OrderBook::refillAskLadder()
+{
+    uint8_t n      = 0;
+    Tick tail_tick {-1};
+
+    for (int32_t i = to_int(best_ask_tick_);
+         i >= 0 && i <= to_int(max_tick_) && n < Depth;
          ++i) {
-        uint32_t const ui = static_cast<uint32_t>(i);
-        uint64_t const q  = ask_qty_[ui];
-        if (q != 0) {
-            ask_[n].tick     = ui;
-            ask_[n].size = q;
-            tail_tick = static_cast<int32_t>(ui);
+        const Tick t = Tick{i};
+        const Contracts q  = ask_qty_per_tick_[i];
+        if (q != Contracts{0}) {
+            market_snapshot_.asks[n].tick = t;
+            market_snapshot_.asks[n].size = q;
+            tail_tick = t;
             ++n;
         }
     }
 
     uint8_t const filled = n;
     for (; n < Depth; ++n) {
-        ask_[n].tick     = 0;
-        ask_[n].size = 0;
+        market_snapshot_.asks[n].tick = {};
+        market_snapshot_.asks[n].size = {};
     }
 
     ask_ladder_filled_    = filled;
@@ -145,50 +123,48 @@ void OrderBook<Depth>::refillAskLadder()
 
 // ── Snapshot / update ───────────────────────────────────────────────────────
 
-template <uint8_t Depth>
-void OrderBook<Depth>::onSnapshot(L2Update const& msg)
+
+inline void OrderBook::onSnapshot(L2Update const& msg)
 {
     assert(msg.isSnapshot == true);
 
-    std::fill(bid_qty_.begin(), bid_qty_.end(), 0);
-    std::fill(ask_qty_.begin(), ask_qty_.end(), 0);
-    best_bid_tick_        = -1;
-    best_ask_tick_        = -1;
-    bid_ladder_tail_tick_ = -1;
-    ask_ladder_tail_tick_ = -1;
+    std::fill_n(bid_qty_per_tick_.get(), num_ticks_, Contracts{0});
+    std::fill_n(ask_qty_per_tick_.get(), num_ticks_, Contracts{0});
+    best_bid_tick_        = Tick{-1};
+    best_ask_tick_        = Tick{-1};
+    bid_ladder_tail_tick_ = Tick{-1};
+    ask_ladder_tail_tick_ = Tick{-1};
     bid_ladder_filled_    = 0;
     ask_ladder_filled_    = 0;
 
     for (uint8_t i = 0; i < msg.bid_count; ++i) {
-        uint32_t const tick = static_cast<uint32_t>(msg.bids[i].price);
+        const Tick tick = Tick{product_->price_to_tick(msg.bids[i].price)};
         if (!inRangeTick(tick))
             continue;
-        uint64_t const q = static_cast<uint64_t>(msg.bids[i].size);
-        if (q == 0)
+        const Contracts q = product_->to_contracts(msg.bids[i].size);
+        if (to_int(q) == 0)
             continue;
-        bid_qty_[tick] = q;
-        if (best_bid_tick_ < 0 || static_cast<int32_t>(tick) > best_bid_tick_)
-            best_bid_tick_ = static_cast<int32_t>(tick);
+        bid_qty_per_tick_[to_int(tick)] = q;
+        if (best_bid_tick_ < Tick{0} || tick > best_bid_tick_) best_bid_tick_ = tick;
     }
 
     for (uint8_t i = 0; i < msg.ask_count; ++i) {
-        uint32_t const tick = static_cast<uint32_t>(msg.asks[i].price);
+        const Tick tick = Tick{product_->price_to_tick(msg.asks[i].price)};
         if (!inRangeTick(tick))
             continue;
-        uint64_t const q = static_cast<uint64_t>(msg.asks[i].size);
-        if (q == 0)
+        const Contracts q = product_->to_contracts(msg.asks[i].size);
+        if (to_int(q) == 0)
             continue;
-        ask_qty_[tick] = q;
-        if (best_ask_tick_ < 0 || static_cast<int32_t>(tick) < best_ask_tick_)
-            best_ask_tick_ = static_cast<int32_t>(tick);
+        ask_qty_per_tick_[to_int(tick)] = q;
+        if (best_ask_tick_ < Tick{0} || tick < best_ask_tick_) best_ask_tick_ = tick;
     }
 
     refillBidLadder();
     refillAskLadder();
 }
 
-template <uint8_t Depth>
-void OrderBook<Depth>::onUpdate(L2Update const& msg)
+
+inline void OrderBook::onUpdate(L2Update const& msg)
 {
     assert(msg.isSnapshot == false);
 
@@ -196,32 +172,32 @@ void OrderBook<Depth>::onUpdate(L2Update const& msg)
     bool refill_ask = false;
 
     for (uint8_t i = 0; i < msg.bid_count; ++i) {
-        uint32_t const tick = static_cast<uint32_t>(msg.bids[i].price);
+        const Tick tick = Tick{product_->price_to_tick(msg.bids[i].price)};
         if (!inRangeTick(tick))
             continue;
 
-        int32_t const ti          = static_cast<int32_t>(tick);
-        int32_t const best_before = best_bid_tick_;
-        applyBidTick(tick, static_cast<uint64_t>(msg.bids[i].size));
-        bool const best_changed = (best_bid_tick_ != best_before);
-        bool const may_affect_ladder =
-            (bid_ladder_tail_tick_ < 0) || (bid_ladder_filled_ < Depth) ||
-            (ti >= bid_ladder_tail_tick_);
+        const Tick best_before = best_bid_tick_;
+        const Contracts num_contracts = product_->to_contracts(msg.bids[i].size);
+        applyBidTick(tick, num_contracts);
+        const bool best_changed = (best_bid_tick_ != best_before);
+        const bool may_affect_ladder =
+            (bid_ladder_tail_tick_ < Tick{0}) || (bid_ladder_filled_ < Depth) ||
+            (tick >= bid_ladder_tail_tick_);
         refill_bid |= (best_changed || may_affect_ladder);
     }
 
     for (uint8_t i = 0; i < msg.ask_count; ++i) {
-        uint32_t const tick = static_cast<uint32_t>(msg.asks[i].price);
+        const Tick tick = Tick{product_->price_to_tick(msg.asks[i].price)};
         if (!inRangeTick(tick))
             continue;
 
-        int32_t const ti          = static_cast<int32_t>(tick);
-        int32_t const best_before = best_ask_tick_;
-        applyAskTick(tick, static_cast<uint64_t>(msg.asks[i].size));
-        bool const best_changed = (best_ask_tick_ != best_before);
-        bool const may_affect_ladder =
-            (ask_ladder_tail_tick_ < 0) || (ask_ladder_filled_ < Depth) ||
-            (ti <= ask_ladder_tail_tick_);
+        const Tick best_before = best_ask_tick_;
+        const Contracts num_contracts = product_->to_contracts(msg.asks[i].size);
+        applyAskTick(tick, num_contracts);
+        const bool best_changed = (best_ask_tick_ != best_before);
+        const bool may_affect_ladder =
+            (ask_ladder_tail_tick_ < Tick{0}) || (ask_ladder_filled_ < Depth) ||
+            (tick <= ask_ladder_tail_tick_);
         refill_ask |= (best_changed || may_affect_ladder);
     }
 
@@ -231,8 +207,12 @@ void OrderBook<Depth>::onUpdate(L2Update const& msg)
         refillAskLadder();
 }
 
-template <uint8_t Depth>
-void OrderBook<Depth>::update(L2Update const& msg) {
+
+inline void OrderBook::update(L2Update const& msg) {
+
+    market_snapshot_.last_seq = msg.sequence_no;
+    market_snapshot_.last_update_ts_ns = msg.timestamp;
+
     if (msg.isSnapshot) {
         onSnapshot(msg);
     } else {
@@ -242,34 +222,52 @@ void OrderBook<Depth>::update(L2Update const& msg) {
 
 // ── Display accessors ─────────────────────────────────────────────────────────
 
-template <uint8_t Depth>
-double OrderBook<Depth>::mid() const
+
+inline double OrderBook::mid() const
 {
-    if (bid_[0].size == 0 || ask_[0].size == 0)
+    if (market_snapshot_.bids[0].size == Contracts{0} || market_snapshot_.asks[0].size == Contracts{0})
         return 0.0;
-    return 0.5 * (priceFromTick(bid_[0].tick) + priceFromTick(ask_[0].tick));
+    const double bid_price = product_->tick_to_price(market_snapshot_.bids[0].tick);
+    const double ask_price = product_->tick_to_price(market_snapshot_.asks[0].tick);
+    return 0.5 * (bid_price + ask_price);
 }
 
-template <uint8_t Depth>
-double OrderBook<Depth>::spread() const
+
+inline Tick OrderBook::bestBidPlusAsk() const
 {
-    if (bid_[0].size == 0 || ask_[0].size == 0)
-        return 0.0;
-    return priceFromTick(ask_[0].tick) - priceFromTick(bid_[0].tick);
+    if (market_snapshot_.bids[0].size == Contracts{0} || market_snapshot_.asks[0].size == Contracts{0})
+        return Tick{0};
+    return market_snapshot_.bids[0].tick + market_snapshot_.asks[0].tick;
 }
 
-template <uint8_t Depth>
-double OrderBook<Depth>::bestBidPrice() const
+
+inline Tick OrderBook::spread() const
 {
-    if (best_bid_tick_ < 0)
-        return 0.0;
-    return priceFromTick(static_cast<uint32_t>(best_bid_tick_));
+    if (to_int(market_snapshot_.bids[0].size) <= 0 || to_int(market_snapshot_.asks[0].size) <= 0) return Tick{-1};
+    return market_snapshot_.asks[0].tick - market_snapshot_.bids[0].tick;
 }
 
-template <uint8_t Depth>
-double OrderBook<Depth>::bestAskPrice() const
+
+inline Tick OrderBook::bestBidTick() const
 {
-    if (best_ask_tick_ < 0)
-        return 0.0;
-    return priceFromTick(static_cast<uint32_t>(best_ask_tick_));
+    if (to_int(best_bid_tick_) < 0) return Tick{-1};
+    return best_bid_tick_;
+}
+
+
+inline Tick OrderBook::bestAskTick() const
+{
+    if (to_int(best_ask_tick_) < 0) return Tick{-1};
+    return best_ask_tick_;
+}
+
+
+inline const MarketSnapshot& OrderBook::snapshot()
+{
+    market_snapshot_.best_bid = bestBidTick();
+    market_snapshot_.best_ask = bestAskTick();
+    market_snapshot_.bestBidPlusAsk = bestBidPlusAsk();
+    market_snapshot_.spread = spread();
+
+    return market_snapshot_;
 }
