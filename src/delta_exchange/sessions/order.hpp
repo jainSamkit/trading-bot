@@ -10,7 +10,9 @@
 
 class OrderSession : public Session<OrderSession, DeltaOMSWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::Order;
     static constexpr SessionType session_type = SessionType::Private;
+    using Span = latency::Span;
 
     explicit OrderSession(DeltaOMSWebsocketClient& client, SessionID sessionID)
         : Session<OrderSession, DeltaOMSWebsocketClient>(client, sessionID) {}
@@ -156,14 +158,24 @@ public:
     }
 
     void push_signal(OMSSignal sig) {
-        OMSEvent* slot = client_.get_ring_slot();
-        if (!slot) return;
+
+        OMSEvent* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
         
+        if (!slot) return;
+
         *slot = {};
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
-        client_.commit_to_ring();
+
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onMessage(std::string_view msg) {
@@ -202,7 +214,13 @@ public:
                     for (auto elem : arr) {
                         simdjson::ondemand::object obj;
                         if (elem.get_object().get(obj)) continue;
-                        OMSEvent* slot = client_.get_ring_slot();
+
+                        OMSEvent* slot;
+                        {
+                            Span s(ringwait_hist_);
+                            slot = client_.get_ring_slot();
+                        }
+
                         if (!slot) continue;  // ring full — drop
                         *slot = {};
                         slot->type   = OMSEventType::Order;
@@ -219,7 +237,10 @@ public:
                         }
                         
                         printOrder(*slot);
-                        client_.commit_to_ring();
+                        {
+                            Span s(ringpush_hist_);
+                            client_.commit_to_ring();
+                        }
                     }
                 }
             }
@@ -238,7 +259,13 @@ public:
 
         if(in_snapshot_) return;
         // CRUD update — single order, all fields at top level including seq_no.
-        OMSEvent* slot = client_.get_ring_slot();
+
+        OMSEvent* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+        
         if (!slot) return;  // ring full — drop
         *slot = {};
         slot->type   = OMSEventType::Order;
@@ -266,7 +293,10 @@ public:
         if(slot->order.client_order_id == 0) slot->order.client_order_id = slot->order.id;
 
         printOrder(*slot);
-        client_.commit_to_ring();
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onSubscribe() {

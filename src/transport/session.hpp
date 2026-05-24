@@ -2,6 +2,7 @@
 #include <chrono>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include "latency/registry.hpp"
 
 // Included from wsclient.hpp after WebSocketClient is fully defined.
 // Do NOT include this file directly — include wsclient.hpp instead.
@@ -16,7 +17,11 @@ public:
     using Ctx = SessionCtx;
 
     explicit Session(ClientDerived& client, SessionID sessionID)
-        : client_(client), ctx_{.id = sessionID} {}
+        : client_(client), ctx_{.id = sessionID} {
+            jsonparse_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::JsonParse, .msg_type = DerivedSession::MSG_TYPE});
+            ringwait_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingWait, .msg_type = DerivedSession::MSG_TYPE});
+            ringpush_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingPush, .msg_type = DerivedSession::MSG_TYPE});
+        }
 
     bool isHeartbeat(std::string_view msg) {
         if(msg.size() > 64 + simdjson::SIMDJSON_PADDING) return false;
@@ -74,7 +79,11 @@ public:
                 }
             }
         }
-        derivedSession().onMessage(m);
+        
+        {                                                            
+            latency::Span s(jsonparse_hist_);     // ← wraps only the parse, not heartbeats/auth                                                                                                                                                                                                   
+            derivedSession().onMessage(m);                                            
+        } 
     }
 
 
@@ -253,6 +262,9 @@ public:
     }
 
 protected:
+    latency::Histogram* jsonparse_hist_ = nullptr;
+    latency::Histogram* ringwait_hist_ = nullptr;
+    latency::Histogram* ringpush_hist_ = nullptr;
     ClientDerived& client_;
     Ctx ctx_;
 

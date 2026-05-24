@@ -8,7 +8,10 @@ using namespace std;
 
 class TradeSession : public Session<TradeSession, DeltaWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::Trade;
     static constexpr SessionType session_type = SessionType::Public;
+
+    using Span = latency::Span;
 
     explicit TradeSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<TradeSession, DeltaWebsocketClient>(client, sessionID) {}
@@ -36,7 +39,12 @@ public:
     void onMessage(std::string_view msg) {
 
         // std::cout<<"[trade raw msg]: "<<msg<<'\n';
-        FeedMessage* slot = client_.get_ring_slot();
+        FeedMessage* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
         slot->type = FeedMessage::Type::Trade;
 
         simdjson::ondemand::parser& parser = client_.get_parser();
@@ -79,12 +87,16 @@ public:
 
         if (trade_data.instrument_id == UINT8_MAX) return;
 
-        slot->t_kernel = parser_.t_kernel;
+        slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
         slot->instrument_id = trade_data.instrument_id;
-        
-        client_.commit_to_ring();
+
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
+
     }
 
     void onAuth() {}

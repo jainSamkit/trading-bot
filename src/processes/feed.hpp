@@ -8,6 +8,8 @@
 #include "ipc/shared_state.hpp"
 #include "market_state/market_state.hpp"
 #include "delta_exchange/models/product.hpp"
+#include "latency/registry.hpp"
+#include "latency/influx_writer.hpp"
 #include <atomic>
 #include <csignal>
 #include <concepts>
@@ -22,20 +24,21 @@ struct FeedConfig {
     std::string path;
 };
 
+
 template<typename T>
 concept IsWebSocketClient = std::derived_from<T, WebSocketClient<T>>;
 
 template<IsWebSocketClient Client>
 class FeedProcess {
     static constexpr size_t FEED_RING_SIZE = cfg::FEED_RING_SIZE;
-    
+
 public:
     FeedProcess(const ProductTable& products,
                 const ProductGroup& product_group,
                 SharedState* const  shared_state,
-                const FeedConfig&   cfg)
+                const FeedConfig&   cfg, latency::InfluxWriter::Config influx_cfg, latency::TagSet::Venue venue)
         : shared_state_(shared_state), products_(products),
-          product_group_(product_group), cfg_(cfg) {}
+          product_group_(product_group), cfg_(cfg), influx_cfg_(influx_cfg), venue_(venue) {}
 
     void start() {
 
@@ -45,6 +48,11 @@ public:
         sigemptyset(&sa.sa_mask);
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
+
+        influx_writer_ = std::make_unique<latency::InfluxWriter>(influx_cfg_);
+
+        latency::Registry::init(venue_);
+        latency::Registry::start_periodic_push(influx_writer_.get(), latency::PUSH_INTERVAL_SECONDS);
 
         feedRing_ = std::make_unique<SpscRing<FeedMessage, FEED_RING_SIZE>>();
 
@@ -61,6 +69,7 @@ public:
         running_.store(false, std::memory_order_relaxed);
         if (client_) client_->shutdown();
         if (market_thread_.joinable()) market_thread_.join();
+        latency::Registry::stop_periodic_push();
     }
 
     ~FeedProcess() { stop(); }
@@ -84,6 +93,10 @@ private:
     const ProductTable&                             products_;
     const ProductGroup&                             product_group_;
     const FeedConfig&                               cfg_;
+    latency::InfluxWriter::Config                   influx_cfg_;
+    latency::TagSet::Venue                          venue_;
+    std::unique_ptr<latency::InfluxWriter>          influx_writer_;
+
     std::atomic<bool>                               running_{true};
     std::atomic<bool>                               stopped_{false};
 

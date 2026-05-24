@@ -6,14 +6,22 @@
 class OHLCSession : public Session<OHLCSession, DeltaWebsocketClient> {
 
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::OHLC;
     static constexpr SessionType session_type = SessionType::Public;
+    using Span = latency::Span;
     explicit OHLCSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<OHLCSession, DeltaWebsocketClient>(client, sessionID) {}
 
 
     void onMessage(std::string_view msg) {
         // std::cout<<"[raw msg]: "<<msg<<'\n';
-        FeedMessage* slot = client_.get_ring_slot();
+
+        FeedMessage* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
         slot->type = FeedMessage::Type::OHLC;
 
         auto& ohlc_slot = slot->ohlc;
@@ -66,10 +74,14 @@ public:
             }
         }
 
-        slot->t_kernel = parser_.t_kernel;
+        slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
-        client_.commit_to_ring();
+
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onAuth() {}

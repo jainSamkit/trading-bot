@@ -19,6 +19,8 @@
 
 #include "core/logger.hpp"
 #include "core/spsc_ring.hpp"
+#include "config/config.hpp"
+#include "config/env.hpp"
 #include "delta_exchange/oms_ws_client.hpp"
 #include "delta_exchange/rest_client.hpp"
 #include "delta_exchange/api/product/product.hpp"
@@ -34,14 +36,13 @@
 #include <string>
 #include <thread>
 
-// ─── config ───────────────────────────────────────────────────────────────────
+// ─── compile-time constants ───────────────────────────────────────────────────
 
-static constexpr const char* PROD_REST_HOST     = "api.india.delta.exchange";
-static constexpr const char* TESTNET_REST_HOST  = "cdn-ind.testnet.deltaex.org";
-static constexpr const char* TESTNET_WS_HOST    = "socket-ind.testnet.deltaex.org";
-static constexpr const char* TESTNET_API_KEY    = "JiV80pv3OJKlUyisMN2x4BHqnKONW5";
-static constexpr const char* TESTNET_API_SECRET = "ELUujrDwVJrK5UiJBkQyBKTJNdVvOOy8OKUuEsjxaeeLWXai6emZYsCFtt40";
-static constexpr const char* TEST_SYMBOL        = "SOLUSD";
+static constexpr const char* TEST_SYMBOL = "SOLUSD";
+static constexpr size_t OMS_RING_SIZE    = cfg::OMS_RING_SIZE;
+
+// Test against testnet by default. .env can flip this by changing
+// DELTA_REST_HOST / DELTA_WS_PRIVATE_HOST.
 
 // ─── globals ──────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ static void dump_orders(const OrderStateManager& mgr, const ProductTable& produc
 
 static TestResult test_channel_snapshot(const OrderStateManager& mgr) {
     LOG_INFO("test1", "waiting for all channels to reach Valid (timeout 30 s)...");
-    bool ok = wait_until([&]{ return channels_valid(mgr); }, 5000);
+    bool ok = wait_until([&]{ return channels_valid(mgr); }, 30000);
     if (!ok) return {false, "channel_snapshot", "channels did not reach Valid within 30 s"};
     LOG_INFO("test1", "orders=Valid  positions=Valid  wallet=%s",
              mgr.debug_state().wallet_state_.load() == ChannelState::Valid ? "Valid" : "not Valid");
@@ -144,7 +145,7 @@ static TestResult test_crud_ws_echo(DeltaRestClient& rest,
         return {false, "crud_ws_echo", "channels not Valid at test start"};
 
     const Product& p  = products[products.idfromSymbol(TEST_SYMBOL)];
-    SpscRing<OMSEvent, 256> rest_ring;
+    SpscRing<OMSEvent, OMS_RING_SIZE> rest_ring;
 
     // ── CREATE ────────────────────────────────────────────────────────────────
     LOG_INFO("test2", "--- CREATE ---");
@@ -325,7 +326,7 @@ static TestResult test_reconnect(DeltaOMSWebsocketClient& ws,
 
 static TestResult test_reconcile(DeltaRestClient& rest,
                                  const OrderStateManager& mgr,
-                                 SpscRing<OMSEvent, 256>& reconcile_ring,
+                                 SpscRing<OMSEvent, OMS_RING_SIZE>& reconcile_ring,
                                  const ProductTable& products) {
     if (!channels_valid(mgr))
         return {false, "reconcile", "channels not Valid at reconcile test start"};
@@ -378,7 +379,7 @@ static TestResult test_stop_orders(DeltaRestClient& rest,
         return {false, "stop_orders", "channels not Valid at test start"};
 
     const Product& p = products[products.idfromSymbol(TEST_SYMBOL)];
-    SpscRing<OMSEvent, 256> rest_ring;
+    SpscRing<OMSEvent, OMS_RING_SIZE> rest_ring;
 
     // ── CREATE SL sell — triggers if mark drops to 70 (far below ~85, safe) ──
     LOG_INFO("test5", "--- CREATE SL stop order ---");
@@ -494,7 +495,7 @@ static TestResult test_market_order_position(DeltaRestClient& rest,
 
     const Product& p           = products[products.idfromSymbol(TEST_SYMBOL)];
     const uint8_t  instr_id    = products.idfromSymbol(TEST_SYMBOL);
-    SpscRing<OMSEvent, 256> rest_ring;
+    SpscRing<OMSEvent, OMS_RING_SIZE> rest_ring;
 
     const int32_t size_before = mgr.debug_state().positions_[instr_id].size;
     ExecutionOrderSide order_side = size_before < 0 ?  ExecutionOrderSide::Sell : ExecutionOrderSide::Buy;
@@ -562,7 +563,7 @@ static TestResult test_cancel_all_orders(DeltaRestClient& rest,
 
     const Product& p        = products[products.idfromSymbol(TEST_SYMBOL)];
     const uint8_t  instr_id = products.idfromSymbol(TEST_SYMBOL);
-    SpscRing<OMSEvent, 256> rest_ring;
+    SpscRing<OMSEvent, OMS_RING_SIZE> rest_ring;
 
     // ── create 2 limit buy orders far OTM ────────────────────────────────────
     LOG_INFO("test7", "creating 2 limit orders...");
@@ -643,7 +644,7 @@ static TestResult test_close_all_positions(DeltaRestClient& rest,
 
     const Product& p        = products[products.idfromSymbol(TEST_SYMBOL)];
     const uint8_t  instr_id = products.idfromSymbol(TEST_SYMBOL);
-    SpscRing<OMSEvent, 256> rest_ring;
+    SpscRing<OMSEvent, OMS_RING_SIZE> rest_ring;
 
     if (mgr.debug_state().positions_[instr_id].size == 0)
         return {false, "close_all_positions", "no open position — test 6 must pass first"};
@@ -735,11 +736,18 @@ int main() {
     std::signal(SIGINT,  on_signal);
     std::signal(SIGTERM, on_signal);
 
+    // ── 0. load .env + resolve config ─────────────────────────────────────────
+    env::load_file(".env");
+    const std::string rest_host    = env::get_or("DELTA_REST_HOST",       cfg::delta_exchange::testnet::REST_HOST);
+    const std::string ws_priv_host = env::get_or("DELTA_WS_PRIVATE_HOST", cfg::delta_exchange::testnet::WS_HOST_PRIVATE);
+    const std::string api_key      = env::require("DELTA_API_KEY");
+    const std::string api_secret   = env::require("DELTA_API_SECRET");
+
     // ── 1. fetch products ─────────────────────────────────────────────────────
-    LOG_INFO("init", "fetching %s from %s", TEST_SYMBOL, TESTNET_REST_HOST);
+    LOG_INFO("init", "fetching %s from %s", TEST_SYMBOL, rest_host.c_str());
     ProductTable products;
     {
-        DeltaRestClient prod_rest(TESTNET_REST_HOST, "", "", ProductTable{});
+        DeltaRestClient prod_rest(rest_host.c_str(), "", "", ProductTable{});
         prod_rest.connect();
         try {
             products.add(fetch_product(prod_rest, TEST_SYMBOL));
@@ -753,15 +761,15 @@ int main() {
     }
 
     // ── 2. rings (heap — SpscRing<OMSEvent,256> is large) ────────────────────
-    auto oms_ws_ring        = std::make_unique<SpscRing<OMSEvent, 256>>();
-    auto oms_rest_ring      = std::make_unique<SpscRing<OMSEvent, 256>>();
-    auto oms_reconcile_ring = std::make_unique<SpscRing<OMSEvent, 256>>();
+    auto oms_ws_ring        = std::make_unique<SpscRing<OMSEvent, cfg::OMS_RING_SIZE>>();
+    auto oms_rest_ring      = std::make_unique<SpscRing<OMSEvent, cfg::OMS_RING_SIZE>>();
+    auto oms_reconcile_ring = std::make_unique<SpscRing<OMSEvent, cfg::OMS_RING_SIZE>>();
 
     // ── 3. WS client + OMS manager (heap — OrderStateManager is ~2 MB) ───────
-    LOG_INFO("init", "connecting OMS WS to %s", TESTNET_WS_HOST);
+    LOG_INFO("init", "connecting OMS WS to %s", ws_priv_host.c_str());
     auto ws = std::make_unique<DeltaOMSWebsocketClient>(
-        TESTNET_WS_HOST, 443, "/",
-        TESTNET_API_KEY, TESTNET_API_SECRET,
+        ws_priv_host.c_str(), 443, "/",
+        api_key.c_str(), api_secret.c_str(),
         products, oms_ws_ring.get());
     g_ws = ws.get();
 
@@ -775,7 +783,7 @@ int main() {
     std::thread oms_thread([&]{ mgr->run(g_running); });
 
     // ── 5. REST client for CRUD + reconcile ───────────────────────────────────
-    DeltaRestClient test_rest(TESTNET_REST_HOST, TESTNET_API_KEY, TESTNET_API_SECRET, products);
+    DeltaRestClient test_rest(rest_host.c_str(), api_key.c_str(), api_secret.c_str(), products);
     test_rest.connect();
 
     // ── 6. run tests ──────────────────────────────────────────────────────────

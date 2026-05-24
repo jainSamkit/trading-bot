@@ -9,15 +9,15 @@ class LatencyStats {
     static constexpr int REPORT_EVERY = 500;
 
     struct Sample {
-        int32_t socket_to_parse;   // ns: t_parse  - t_kernel
+        int32_t socket_to_parse;   // ns: t_parse  - t_recv_userspace
         int32_t parse_to_consume;  // ns: t_consume - t_parse
-        int32_t total;             // ns: t_consume - t_kernel
+        int32_t total;             // ns: t_consume - t_recv_userspace
     };
 
     std::array<Sample, N> buf_{};
     int count_ = 0;
 
 public:
-    void record(int64_t t_kernel, int64_t t_frame, int64_t t_parse, int64_t t_consume);
+    void record(int64_t t_recv_userspace, int64_t t_frame, int64_t t_parse, int64_t t_consume);
     void print() const;
 };

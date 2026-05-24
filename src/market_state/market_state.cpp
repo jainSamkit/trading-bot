@@ -1,4 +1,5 @@
 #include "market_state/market_state.hpp"
+#include "core/cpu_relax.hpp"
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -7,59 +8,89 @@ MarketState::MarketState(SpscRing<FeedMessage, FEED_RING_SIZE>* const ring,
     SharedState* const shared_state, const ProductTable& products, const ProductGroup& product_group)
     : feed_ring_(ring), shared_state_(shared_state), products_(products), product_group_(product_group) {
         for (uint8_t instrument_id : product_group_.instrument_ids) instrument_valid_[instrument_id] = true;
-}
-
-void MarketState::handle_l2_update(const FeedMessage& msg) {
-    uint8_t id = msg.instrument_id;
-    if (!instrument_valid_[id]) return;
-    const Product& prod = products_[id];
-
-    if (!orderbook_init_[id]) {
-        if (!msg.l2.isSnapshot) return;  // wait for snapshot to seed bounds
-        Tick max_tick{0};
-
-        for (uint8_t i = 0; i < msg.l2.ask_count; ++i) {
-            const double price = msg.l2.asks[i].price;
-            Tick t = prod.price_to_tick(price);
-            if (t > max_tick) max_tick = t;
-        }
-
-        for (uint8_t i = 0; i < msg.l2.bid_count; ++i) {
-            const double price = msg.l2.bids[i].price;
-            Tick t = prod.price_to_tick(price);
-            if (t > max_tick) max_tick = t;
-        }
-
-        if (max_tick == Tick{0}) return;
-        orderbooks_[id].init(id, Tick{0}, max_tick * 3, prod);
-        orderbook_init_[id] = true;
+        l2_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::L2, .target = latency::TagSet::Target::MarketState});
+        mark_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::Mark, .target = latency::TagSet::Target::MarketState});
+        spot_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::Spot, .target = latency::TagSet::Target::MarketState});
+        trade_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::Trade, .target = latency::TagSet::Target::MarketState});
+        ohlc_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::OHLC, .target = latency::TagSet::Target::MarketState});
+        ringwait_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingWait, .target = latency::TagSet::Target::MarketState});
+        ringpush_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingPush, .target = latency::TagSet::Target::MarketState});
+        l2_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::L2, .target = latency::TagSet::Target::MarketState});
+        mark_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::Mark, .target = latency::TagSet::Target::MarketState});
+        spot_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::Spot, .target = latency::TagSet::Target::MarketState});
+        trade_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::Trade, .target = latency::TagSet::Target::MarketState});
+        ohlc_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::OHLC, .target = latency::TagSet::Target::MarketState});
     }
 
-    orderbooks_[id].update(msg.l2);
-    shared_state_->market_state[msg.instrument_id].write(orderbooks_[id].snapshot());
+void MarketState::handle_l2_update(const FeedMessage& msg) {
+    {
+        Span s(l2_handler_hist_);
+        uint8_t id = msg.instrument_id;
+        if (!instrument_valid_[id]) return;
+        const Product& prod = products_[id];
+
+        if (!orderbook_init_[id]) {
+            if (!msg.l2.isSnapshot) return;  // wait for snapshot to seed bounds
+            Tick max_tick{0};
+
+            for (uint8_t i = 0; i < msg.l2.ask_count; ++i) {
+                const double price = msg.l2.asks[i].price;
+                Tick t = prod.price_to_tick(price);
+                if (t > max_tick) max_tick = t;
+            }
+
+            for (uint8_t i = 0; i < msg.l2.bid_count; ++i) {
+                const double price = msg.l2.bids[i].price;
+                Tick t = prod.price_to_tick(price);
+                if (t > max_tick) max_tick = t;
+            }
+
+            if (max_tick == Tick{0}) return;
+            orderbooks_[id].init(id, Tick{0}, max_tick * 3, prod);
+            orderbook_init_[id] = true;
+        }
+
+        orderbooks_[id].update(msg.l2);
+        const MarketSnapshot& snapshot = orderbooks_[id].snapshot();
+        {
+            Span s(l2_shm_hist_);
+            shared_state_->market_state[msg.instrument_id].write(snapshot);
+        }
+    }
 }
 
 void MarketState::handle_mark_price_data(const FeedMessage& msg) {
-    if (instrument_valid_[msg.instrument_id])  {
-        uint8_t instrument_id = msg.instrument_id;
-        mark_prices_[instrument_id] = msg.mark_price_data;
-        MarkPriceSnapshot mark_price_snapshot {
-            .last_update_ts_ns = msg.mark_price_data.timestamp,
-            .mark_price_tick   = products_[instrument_id].price_to_tick(msg.mark_price_data.price),
-        };
-        shared_state_->mark_prices[instrument_id].write(mark_price_snapshot);
+    {
+        Span s(mark_handler_hist_);
+        if (instrument_valid_[msg.instrument_id])  {
+            uint8_t instrument_id = msg.instrument_id;
+            mark_prices_[instrument_id] = msg.mark_price_data;
+            MarkPriceSnapshot mark_price_snapshot {
+                .last_update_ts_ns = msg.mark_price_data.timestamp,
+                .mark_price_tick   = products_[instrument_id].price_to_tick(msg.mark_price_data.price),
+            };
+            {
+                Span s(mark_shm_hist_);
+                shared_state_->mark_prices[instrument_id].write(mark_price_snapshot);
+            }
+        }
     }
 }
 
 void MarketState::handle_spot_price_data(const FeedMessage& msg) {
-
-    if (instrument_valid_[msg.instrument_id])  {
-        uint8_t instrument_id = msg.instrument_id;
-        spot_prices_[instrument_id] = msg.spot_price_data;
-        SpotPriceSnapshot spot_price_snapshot {
-            .spot_price_tick   = products_[instrument_id].price_to_tick(msg.spot_price_data.price),
-        };
-        shared_state_->spot_prices[instrument_id].write(spot_price_snapshot);
+    {
+        Span s(spot_handler_hist_);
+        if (instrument_valid_[msg.instrument_id])  {
+            uint8_t instrument_id = msg.instrument_id;
+            spot_prices_[instrument_id] = msg.spot_price_data;
+            SpotPriceSnapshot spot_price_snapshot {
+                .spot_price_tick   = products_[instrument_id].price_to_tick(msg.spot_price_data.price),
+            };
+            {
+                Span s(spot_shm_hist_);
+                shared_state_->spot_prices[instrument_id].write(spot_price_snapshot);
+            }
+        }
     }
 }
 
@@ -69,25 +100,29 @@ void MarketState::handle_ohlc_data(const FeedMessage& msg) {
 }
 
 void MarketState::handle_trade_data(const FeedMessage& msg) {
+    {
+        Span s(trade_handler_hist_);
+        const uint8_t id = msg.instrument_id;
+        if (!instrument_valid_[id]) return;
 
+        const Product& prod = products_[id];
+        const TradeData& tr = msg.trade_data;
 
-    const uint8_t id = msg.instrument_id;
-    if (!instrument_valid_[id]) return;
+        const bool   is_taker_buy = (tr.buyer_role == TradeData::BuyerRole::Taker);
+        const double signed_size  = is_taker_buy ? +tr.size : -tr.size;
 
-    const Product& prod = products_[id];
-    const TradeData& tr = msg.trade_data;
-
-    const bool   is_taker_buy = (tr.buyer_role == TradeData::BuyerRole::Taker);
-    const double signed_size  = is_taker_buy ? +tr.size : -tr.size;
-
-    const TradeEntry trade_entry {
-        .timestamp     = tr.trade_time,
-        .tick          = prod.price_to_tick(tr.price),
-        .size          = prod.to_contracts(signed_size),
-        .instrument_id = id,
-    };
-    shared_state_->trade_ring.write(trade_entry);
-    printTFI(msg);
+        const TradeEntry trade_entry {
+            .timestamp     = tr.trade_time,
+            .tick          = prod.price_to_tick(tr.price),
+            .size          = prod.to_contracts(signed_size),
+            .instrument_id = id,
+        };
+        {
+            Span s(trade_shm_hist_);
+            shared_state_->trade_ring.write(trade_entry);
+        }
+    }
+    // printTFI(msg);
 }
 
 void MarketState::printTFI(const FeedMessage& msg) {
@@ -130,39 +165,47 @@ void MarketState::run(std::atomic<bool>& running) {
     int64_t last_print_ns = ms_now_ns();
 
     while (running.load(std::memory_order_relaxed)) {
-        auto* msg = feed_ring_->pop_begin();
+
+        const uint64_t t0 = latency::now_cycles();
+        FeedMessage* msg = feed_ring_->pop_begin(); 
+
         if (!msg) {
-            const int64_t now = ms_now_ns();
-            if (now - last_print_ns >= 1'000'000'000LL) {
-                // {resolution name, index in ohlc_resolutions}
-                // static constexpr std::pair<const char*, uint8_t> RES[] = {
-                //     {"1m",  0},
-                //     {"5m",  2},
-                //     {"30m", 4},
-                // };
-                for (uint8_t i = 0; i < product_group_.instrument_ids.size(); ++i) {
-                    uint8_t instrument_id = product_group_.instrument_ids[i];
-                    printBook(orderbooks_[instrument_id], products_[instrument_id],
-                              mark_prices_[instrument_id], spot_prices_[instrument_id],
-                              tfi_windows_[instrument_id]);
-                    // for (const auto& [name, idx] : RES)
-                    //     printOHLC(products_[instrument_id].symbol, name,
-                    //               candle_store_[0][instrument_id][idx],   // trade
-                    //               candle_store_[1][instrument_id][idx]);  // mark
-                }
-                last_print_ns = now;
-            }
+            // const int64_t now = ms_now_ns();
+            // if (now - last_print_ns >= 1'000'000'000LL) {
+            //     // {resolution name, index in ohlc_resolutions}
+            //     // static constexpr std::pair<const char*, uint8_t> RES[] = {
+            //     //     {"1m",  0},
+            //     //     {"5m",  2},
+            //     //     {"30m", 4},
+            //     // };
+            //     for (uint8_t i = 0; i < product_group_.instrument_ids.size(); ++i) {
+            //         uint8_t instrument_id = product_group_.instrument_ids[i];
+            //         printBook(orderbooks_[instrument_id], products_[instrument_id],
+            //                   mark_prices_[instrument_id], spot_prices_[instrument_id],
+            //                   tfi_windows_[instrument_id]);
+            //         // for (const auto& [name, idx] : RES)
+            //         //     printOHLC(products_[instrument_id].symbol, name,
+            //         //               candle_store_[0][instrument_id][idx],   // trade
+            //         //               candle_store_[1][instrument_id][idx]);  // mark
+            //     }
+            //     last_print_ns = now;
+            // }
+            core::cpu_relax();   // PAUSE (x86) / YIELD (ARM) — be nice to siblings + producer cacheline
             continue;
         }
 
+        const uint64_t t1 = latency::now_cycles();
+        ringwait_hist_->record_cycles(t1-t0);
+
         // const int64_t t_consume = ms_now_ns();
-        // stats_.record(msg->t_kernel, msg->t_frame, msg->t_parse, t_consume);
-
-        if(!msg) continue;
-
+        // stats_.record(msg->t_recv_userspace, msg->t_frame, msg->t_parse, t_consume);
         const auto type_index = static_cast<uint8_t>(msg->type);
         (this->*kHandlers[type_index])(*msg);
-        feed_ring_->pop_commit();
+        
+        {
+            Span s(ringpush_hist_);
+            feed_ring_->pop_commit();
+        }
     }
 }
 

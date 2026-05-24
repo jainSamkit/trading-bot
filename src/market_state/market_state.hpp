@@ -9,6 +9,8 @@
 #include "ipc/shared_state.hpp"
 #include "market_state/latency_stats.hpp"
 #include "market_state/ohlc_ring.hpp"
+#include "latency/registry.hpp"      // brings histogram + tag_set transitively
+#include "latency/span.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -70,6 +72,8 @@ class MarketState {
     static constexpr size_t Depth = cfg::SNAPSHOT_DEPTH;
     static constexpr size_t FEED_RING_SIZE = cfg::FEED_RING_SIZE;
 
+    using Span = latency::Span;
+    using Histogram = latency::Histogram;
 public:
     explicit MarketState(SpscRing<FeedMessage, FEED_RING_SIZE>* const feed_ring, 
         SharedState* const shared_state, const ProductTable& products, const ProductGroup& product_group);
@@ -165,6 +169,8 @@ private:
         &MarketState::handle_ohlc_data,          // [3] OHLC
         &MarketState::handle_spot_price_data,    // [4] SpotPrice
     };
+
+
     
     SpscRing<FeedMessage, FEED_RING_SIZE>* const                feed_ring_;
     SharedState* const                                          shared_state_;
@@ -178,6 +184,20 @@ private:
     TradeData                                                   trade_data[MAX_INSTRUMENTS]{};
     TFIWindow                                                   tfi_windows_[MAX_INSTRUMENTS]{};
     bool                                                        instrument_valid_[MAX_INSTRUMENTS]{};
+
+    Histogram*                                                  l2_handler_hist_ = nullptr;
+    Histogram*                                                  mark_handler_hist_ = nullptr;
+    Histogram*                                                  trade_handler_hist_ = nullptr;
+    Histogram*                                                  ohlc_handler_hist_ = nullptr;
+    Histogram*                                                  spot_handler_hist_ = nullptr;
+    Histogram*                                                  ringpush_hist_ = nullptr;
+    Histogram*                                                  ringwait_hist_ = nullptr;
+
+    Histogram*                                                  l2_shm_hist_ = nullptr;
+    Histogram*                                                  mark_shm_hist_ = nullptr;
+    Histogram*                                                  spot_shm_hist_ = nullptr;
+    Histogram*                                                  trade_shm_hist_ = nullptr;
+    Histogram*                                                  ohlc_shm_hist_ = nullptr;
 
     using ResolutionRings =     std::array<OHLCRing<256>, ohlc_resolutions.size()>;
     using InstrumentCandles =   std::array<ResolutionRings, MAX_INSTRUMENTS>;

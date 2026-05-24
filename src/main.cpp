@@ -3,6 +3,8 @@
 #include "processes/feed.hpp"
 #include "processes/oms.hpp"
 #include "ipc/shm.hpp"
+#include "config/env.hpp"
+#include "latency/clock.hpp"
 #include <sys/wait.h>
 #include <signal.h>
 #include <atomic>
@@ -12,14 +14,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-
-static constexpr const char* PROD_REST_HOST     = "api.india.delta.exchange";
-static constexpr const char* TESTNET_REST_HOST  = "cdn-ind.testnet.deltaex.org";
-static constexpr const char* TESTNET_WS_HOST    = "socket-ind.testnet.deltaex.org";
-static constexpr const char* TESTNET_API_KEY    = "JiV80pv3OJKlUyisMN2x4BHqnKONW5";
-static constexpr const char* TESTNET_API_SECRET = "ELUujrDwVJrK5UiJBkQyBKTJNdVvOOy8OKUuEsjxaeeLWXai6emZYsCFtt40";
-static constexpr const char* TEST_SYMBOL        = "SOLUSD";
 
 
 // Signal handlers only receive int sig — store PIDs in process-global state.
@@ -57,9 +51,22 @@ static void print_product(const Product& p) {
 
 int main(int argc, char** argv)
 {
+    // Load .env from cwd (no error if missing — real shell env still works).
+    // Shell env wins over .env values (overwrite=0 inside the loader).
+    env::load_file(".env");
+
+    // Calibrate the latency clock ONCE in the parent, BEFORE fork(). Each
+    // child inherits the calibrated ns_per_cycle via COW; otherwise every
+    // Span records 0 ns and percentiles flatline at 1. (See clock.hpp.)
+    latency::calibrate();
+
+    const std::string delta_rest_host       = env::get_or("DELTA_REST_HOST",       "api.india.delta.exchange");
+    const std::string delta_ws_public_host  = env::get_or("DELTA_WS_PUBLIC_HOST",  "public-socket.india.delta.exchange");
+    const std::string delta_ws_private_host = env::get_or("DELTA_WS_PRIVATE_HOST", "socket.india.delta.exchange");
+
     ProductTable products;
     std::vector<std::string> allowed_products {"BTCUSD", "ETHUSD", "SOLUSD"};
-    DeltaRestClient rest("api.india.delta.exchange", "", "", products);
+    DeltaRestClient rest(delta_rest_host.c_str(), "", "", products);
     rest.connect();
 
     for (const std::string& sym : allowed_products) {
@@ -80,33 +87,38 @@ int main(int argc, char** argv)
     auto shm_trading_bot = ShmOwner<SharedState>::create("/trading_bot_state");
     SharedState* state = shm_trading_bot.get();
 
-    //samkit testnet public
-    // FeedConfig feed_cfg_ {.host = "socket-ind-pub.testnet.deltaex.org", .port = 443, .path = "/"};
+    FeedConfig feed_cfg_ {
+        .host = delta_ws_public_host,
+        .port = 443,
+        .path = "/",
+    };
 
-    //papa prod public
-    FeedConfig feed_cfg_ {.host = "public-socket.india.delta.exchange", .port = 443, .path = "/"};
-    // FeedProcess<DeltaWebsocketClient> sol_feed {products, sol_group, state, feed_cfg_};
-    FeedProcess<DeltaWebsocketClient> btc_feed {products, btc_group, state, feed_cfg_};
+    latency::InfluxWriter::Config influx_config {
+        .host   = env::get_or    ("INFLUX_HOST",   "127.0.0.1"),
+        .port   = env::get_int_or("INFLUX_PORT",   8086),
+        .org    = env::require   ("INFLUX_ORG"),
+        .bucket = env::require   ("INFLUX_BUCKET"),
+        .token  = env::require   ("INFLUX_TOKEN"),
+    };
+
+    FeedProcess<DeltaWebsocketClient> btc_feed {
+        products, btc_group, state, feed_cfg_,
+        influx_config, latency::TagSet::Venue::Delta,
+    };
     // FeedProcess<DeltaWebsocketClient> eth_feed {products, eth_group, state, cfg};
 
 
-    //samkit testnet private
+    // ── OMS (private session) ─────────────────────────────────────────────
+    // Credentials come from .env via DELTA_API_KEY / DELTA_API_SECRET.
+    // Host is testnet or prod depending on DELTA_WS_PRIVATE_HOST.
+    //
     // OMSConfig oms_cfg_ {
-    //     .host = "socket-ind.testnet.deltaex.org",
-    //     .port = 443, .path = "/", 
-    //     .api_key = "JiV80pv3OJKlUyisMN2x4BHqnKONW5", 
-    //     .api_secret = "ELUujrDwVJrK5UiJBkQyBKTJNdVvOOy8OKUuEsjxaeeLWXai6emZYsCFtt40"
+    //     .host       = delta_ws_private_host,
+    //     .port       = 443,
+    //     .path       = "/",
+    //     .api_key    = env::require("DELTA_API_KEY"),
+    //     .api_secret = env::require("DELTA_API_SECRET"),
     // };
-
-
-    //papa prod config 
-    // OMSConfig oms_cfg_ {
-    //     .host = "socket.india.delta.exchange",
-    //     .port = 443, .path = "/", 
-    //     .api_key = "sbr2TG7ui7GxpUN6lzuoYJzcLuIlVp",
-    //     .api_secret = "sk2zVY2nNAUTDZwmrzH449KCNRCUmWafVvvrVdraTN5js8wvGYuAMy0rsw8C"
-    // };
-
     // OmsProcess<DeltaOMSWebsocketClient, DeltaRestClient> oms_delta {products, oms_cfg_};
     std::vector<FeedProcess<DeltaWebsocketClient>*> feeds;
 

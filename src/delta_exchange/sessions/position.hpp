@@ -10,7 +10,10 @@
 
 class PositionFillSession : public Session<PositionFillSession, DeltaOMSWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::Position;
     static constexpr SessionType session_type = SessionType::Private;
+
+    using Span = latency::Span;
 
     explicit PositionFillSession(DeltaOMSWebsocketClient& client, SessionID sessionID)
         : Session<PositionFillSession, DeltaOMSWebsocketClient>(client, sessionID) {}
@@ -22,14 +25,23 @@ public:
     }
 
     void push_signal(OMSSignal sig) {
-        OMSEvent* slot = client_.get_ring_slot();
-        if (!slot) return;
+        OMSEvent* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
         
+        if (!slot) return;
+
         *slot = {};
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
-        client_.commit_to_ring();
+
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     // Parses position fields into event.position. Works for both snapshot entries and live updates.
@@ -193,7 +205,13 @@ public:
 
         // Fill update — routed by type field
         if (msg.find(R"("v2/user_trades")") != std::string_view::npos) {
-            OMSEvent* slot = client_.get_ring_slot();
+
+            OMSEvent* slot;
+            {
+                Span s(ringwait_hist_);
+                slot = client_.get_ring_slot();
+            }
+            
             if (!slot) return;
             *slot = {};
             slot->type   = OMSEventType::Fill;
@@ -216,7 +234,10 @@ public:
 
             fillSeq_[slot->fill.instrument_id] = seq_no;
             printFill(*slot);
-            client_.commit_to_ring();
+            {
+                Span s(ringpush_hist_);
+                client_.commit_to_ring();
+            }
             return;
         }
 
@@ -233,7 +254,13 @@ public:
                 for (auto elem : arr) {
                     simdjson::ondemand::object obj;
                     if (elem.get_object().get(obj)) continue;
-                    OMSEvent* slot = client_.get_ring_slot();
+
+                    OMSEvent* slot;
+                    {
+                        Span s(ringwait_hist_);
+                        slot = client_.get_ring_slot();
+                    }
+                    
                     if (!slot) continue;  // ring full — drop
 
                     *slot = {};
@@ -242,7 +269,10 @@ public:
                     slot->action = OMSAction::Create;
                     parsePosition(obj, *slot);
                     printPosition(*slot);
-                    client_.commit_to_ring();
+                    {
+                        Span s(ringpush_hist_);
+                        client_.commit_to_ring();
+                    }
                 }
             }
 
@@ -253,7 +283,13 @@ public:
 
         if(in_snapshot_) return;
         // Position live update — fields at top level
-        OMSEvent* slot = client_.get_ring_slot();
+
+        OMSEvent* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+        
         if (!slot) return;
 
         *slot = {};
@@ -265,7 +301,11 @@ public:
         if (doc.get_object().get(obj)) return;
         parsePosition(obj, *slot);
         printPosition(*slot);
-        client_.commit_to_ring();
+
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onSubscribe() {

@@ -3,12 +3,12 @@
 #include <iomanip>
 #include <iostream>
 
-void LatencyStats::record(int64_t t_kernel, int64_t t_frame, int64_t t_parse, int64_t t_consume) {
-    if (t_kernel == 0 || t_parse == 0) return;
+void LatencyStats::record(int64_t t_recv_userspace, int64_t t_frame, int64_t t_parse, int64_t t_consume) {
+    if (t_recv_userspace == 0 || t_parse == 0) return;
     buf_[count_ % N] = {
-        static_cast<int32_t>(t_parse   - t_kernel),
+        static_cast<int32_t>(t_parse   - t_recv_userspace),
         static_cast<int32_t>(t_consume - t_parse),
-        static_cast<int32_t>(t_consume - t_kernel)
+        static_cast<int32_t>(t_consume - t_recv_userspace)
     };
     ++count_;
     if (count_ % REPORT_EVERY == 0) print();

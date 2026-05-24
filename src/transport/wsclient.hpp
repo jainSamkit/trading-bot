@@ -23,6 +23,8 @@
 #include <cstdint>
 #include "transport/types.hpp"
 #include "simdjson.h"
+#include "latency/span.hpp"
+#include "latency/registry.hpp"
 
 static inline int64_t now_ns() {
     struct timespec ts;
@@ -145,7 +147,6 @@ struct WSParser {
     uint8_t  ext_filled_ = 0;
     uint64_t pfilled_    = 0;
     std::vector<uint8_t> payload_;
-
     // fragmentation state
     std::string fragment_buf_;
 
@@ -157,8 +158,11 @@ struct WSParser {
     uint8_t     fragment_opcode_ = 0;
     bool        in_fragment_     = false;
 
-    int64_t t_kernel = 0;   // set by socketfd() via ioctl(SIOCGSTAMPNS) after SSL_read
-    int64_t t_frame  = 0;   // set by dispatch() when frame is fully assembled
+    // User-space wall-clock taken IMMEDIATELY after SSL_read returns > 0.
+    // NOT a kernel/NIC timestamp — that would require SO_TIMESTAMPING at the
+    // recvmsg layer (incompatible with OpenSSL's read path). See task #29.
+    int64_t t_recv_userspace = 0;
+    int64_t t_frame          = 0;   // set by dispatch() when frame is fully assembled
 
     template<typename Callback>
     void feed(const uint8_t* data, size_t len, Callback&& on_frame)
@@ -302,11 +306,18 @@ struct WebSocketClient {
     int      efd_  = -1; //eventfd
     int      epfd_ = -1; //epoll fd
 
-    SSL_CTX* ctx  = nullptr;
+    SSL_CTX* ctx  =             nullptr;
     std::string ws_key_;
     std::string host;
     int port = 0;
     std::string path;
+    latency::Histogram* wsframe_hist_ = nullptr;
+    latency::Histogram* wsread_hist_ = nullptr;
+    
+
+    // Reconnects deferred out of the epoll dispatch loop so the in-flight
+    // events[] batch never sees a torn-down session (see BUG 2).
+    std::vector<std::function<void()>> pending_reconnects_;
 
     // ── init OpenSSL ──────────────────────────────────────────
     bool init() {
@@ -325,6 +336,11 @@ struct WebSocketClient {
         SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
 
         return true;
+    }
+
+    void init_transport_histograms() {
+        wsframe_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::WsFrame});
+        wsread_hist_ =  latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::WsRead});
     }
 
     // ── TCP connect (returns fd; owned by Session, not stored here) ──
@@ -517,62 +533,90 @@ struct WebSocketClient {
             return;
 
         uint8_t buf[BUFSIZE];
+        bool needs_reconnect = false;
+
         for (;;) {
-            int r = SSL_read(ssl, buf, BUFSIZE);
+            int r;
+            {
+                latency::Span s(wsread_hist_);
+                r = SSL_read(ssl, buf, BUFSIZE);
+            }
+
             if (r > 0) {
                 // stamped immediately after SSL_read: post TCP-recv + TLS decrypt,
                 // before frame assembly. True kernel/NIC timestamps require recvmsg
                 // ancillary data below the SSL layer (kernel bypass or AF_XDP).
-                session.parser_.t_kernel = now_ns();
+                session.parser_.t_recv_userspace = now_ns();
+                {
+                    latency::Span s(wsframe_hist_);
+                    session.parser_.feed(buf, static_cast<size_t>(r),
+                        [&](uint8_t opcode, std::string_view msg) {
+                            switch (opcode) {
+                                case 0x1: // text
+                                    session.forward_message(msg);
+                                    break;
+                                case 0x2: // binary
+                                    session.forward_message(msg);
+                                    break;
 
-                session.parser_.feed(buf, static_cast<size_t>(r),
-                    [&](uint8_t opcode, std::string_view msg) {
-                        switch (opcode) {
-                            case 0x1: // text
-                                session.forward_message(msg);
-                                break;
-                            case 0x2: // binary
-                                session.forward_message(msg);
-                                break;
+                                case 0x9: // ping
+                                    ws_send(ssl, msg, 0xA);
+                                    break;
 
-                            case 0x9: // ping
-                                ws_send(ssl, msg, 0xA);
-                                break;
+                                case 0xA: // pong
+                                    break;
 
-                            case 0xA: // pong
-                                break;
+                                case 0x8: // close
+                                    std::cerr << "[session " << (int)slot->ctx->id << "] server sent WS close\n";
+                                    ws_send(ssl, "", 0x8);
+                                    // BUG 1: `return` here only exits the lambda. Signal the
+                                    // outer loop to break and defer reconnect to run_loop.
+                                    needs_reconnect = true;
+                                    return;
 
-                            case 0x8: // close
-                                std::cerr << "[session " << (int)slot->ctx->id << "] server sent WS close\n";
-                                ws_send(ssl, "", 0x8);
-                                session.reconnect();
-                                return;
+                                default:
+                                    std::cerr << "unknown opcode: " << (int)opcode << "\n";
+                            }
+                        });
+                }
 
-                            default:
-                                std::cerr << "unknown opcode: " << (int)opcode << "\n";
-                        }
-                    });
+                if (needs_reconnect) break;
                 continue;
             }
 
             int err = SSL_get_error(ssl, r);
-            if (err == SSL_ERROR_WANT_READ)
+
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+                // BUG 3: OpenSSL can hold fully-decrypted records in its internal
+                // ready-buffer even when the socket has nothing left. Edge-triggered
+                // epoll won't re-fire until new socket bytes arrive, so any data we
+                // leave in SSL_pending() sits unread until the NEXT message — inflating
+                // that frame's apparent latency by the entire idle gap.
+                if (SSL_pending(ssl) > 0)
+                    continue;
                 break;
+            }
 
             if (err == SSL_ERROR_ZERO_RETURN) {
                 std::cerr << "[session " << (int)slot->ctx->id << "] server closed TLS\n";
-                session.reconnect();
-                return;
+                needs_reconnect = true;
+                break;
             }
 
             if (err == SSL_ERROR_SYSCALL) {
                 std::cerr << "[session " << (int)slot->ctx->id << "] SSL_read syscall: " << strerror(errno) << "\n";
-                session.reconnect();
-                return;
+                needs_reconnect = true;
+                break;
             }
 
             ERR_print_errors_fp(stderr);
-            return;
+            needs_reconnect = true;
+            break;
+        }
+
+        // BUG 2: never tear a session down while events[] is still being walked.
+        if (needs_reconnect) {
+            pending_reconnects_.emplace_back([&session]() { session.reconnect(); });
         }
     }
 
@@ -600,7 +644,9 @@ struct WebSocketClient {
         }
         if (drained) {
             std::cerr << "[session " << (int)slot->ctx->id << "] heartbeat timeout — reconnecting\n";
-            session.reconnect();
+            // BUG 2: defer reconnect so we don't tear down a session while the
+            // surrounding epoll batch is still being dispatched.
+            pending_reconnects_.emplace_back([&session]() { session.reconnect(); });
         }
     }
 
@@ -646,6 +692,14 @@ struct WebSocketClient {
                 }
 
                 slot->socket_ready(client, this, slot);
+            }
+
+            // Drain deferred reconnects AFTER the entire events[] batch is
+            // dispatched — otherwise a reconnect mid-batch could free the
+            // EpollSlot that a later events[i] still points at (BUG 2).
+            if (!pending_reconnects_.empty()) {
+                for (auto& fn : pending_reconnects_) fn();
+                pending_reconnects_.clear();
             }
         }
     }

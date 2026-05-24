@@ -26,7 +26,10 @@
 
 class L2UpdateSession : public Session<L2UpdateSession, DeltaWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::L2;
     static constexpr SessionType session_type = SessionType::Public;
+    using Span = latency::Span;
+    
     explicit L2UpdateSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<L2UpdateSession, DeltaWebsocketClient>(client, sessionID) {}
 
@@ -52,7 +55,7 @@ public:
 
         for (auto level : arr) {
             if (count >= MAX_FEED_LEVELS) break;
-            
+
             simdjson::ondemand::array pair;
             if (level.get_array().get(pair)) continue;
 
@@ -77,7 +80,12 @@ public:
     }
 
     void onMessage(std::string_view msg) {
-        FeedMessage* slot = client_.get_ring_slot();
+        FeedMessage* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
         slot->type = FeedMessage::Type::L2Feed;
         auto& l2_slot = slot->l2;
         l2_slot   = L2Update{};   // reset stale ring slot state
@@ -116,22 +124,6 @@ public:
 
         if (l2_slot.instrument_id == UINT8_MAX) return;
 
-    // const Product& product = client_.products_[l2_slot.instrument_id];
-        // convertToTick(slot->l2, product);
-
-        // const L2Update& u = slot->l2;
-        // std::cout << "L2Update{"
-        //           << " sym=" << product.symbol
-        //           << " seq=" << u.sequence_no
-        //           << " snap=" << u.isSnapshot
-        //           << " asks(" << (int)u.ask_count << "):";
-        // for (uint8_t i = 0; i < u.ask_count; ++i)
-        //     std::cout << " [" << u.asks[i].price << "," << u.asks[i].size << "]";
-        // std::cout << " bids(" << (int)u.bid_count << "):";
-        // for (uint8_t i = 0; i < u.bid_count; ++i)
-        //     std::cout << " [" << u.bids[i].price << "," << u.bids[i].size << "]";
-        // std::cout << " }\n";
-
         uint8_t id = l2_slot.instrument_id;
         if (!book_valid_[id]) {
             seq_no_[id]    = l2_slot.sequence_no;
@@ -149,17 +141,14 @@ public:
             l2_slot.isSnapshot = false;
         }
 
-        slot->t_kernel = parser_.t_kernel;
+        slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
         slot->instrument_id = l2_slot.instrument_id;
-        client_.commit_to_ring();
-        // const int64_t t_parse = now_ns();
-        // std::cout << l2_slot
-        //           << " recv_to_frame_ns="  << (parser_.t_frame - parser_.t_kernel)
-        //           << " frame_to_parse_ns=" << (t_parse         - parser_.t_frame)
-        //           << " total_ns="          << (t_parse         - parser_.t_kernel)
-        //           << "\n\n";
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onSubscribe() {

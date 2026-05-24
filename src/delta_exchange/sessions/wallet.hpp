@@ -9,7 +9,9 @@
 
 class WalletSession : public Session<WalletSession, DeltaOMSWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::Wallet;
     static constexpr SessionType session_type = SessionType::Private;
+    using Span = latency::Span;
 
     explicit WalletSession(DeltaOMSWebsocketClient& client, SessionID sessionID)
         : Session<WalletSession, DeltaOMSWebsocketClient>(client, sessionID) {}
@@ -21,15 +23,25 @@ public:
     }
 
     void push_signal(OMSSignal sig) {
-        OMSEvent* slot = client_.get_ring_slot();
+        OMSEvent* slot= nullptr;
+
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
         if (!slot) return;
         *slot = {};
-        
+
         slot->type   = OMSEventType::OMSSignal;
         slot->source = OMSEventSource::Websocket;
         slot->signal = sig;
 
-        client_.commit_to_ring();
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
+
     }
 
     void parseWallet(simdjson::ondemand::object& obj, OMSEvent& event) {
@@ -119,7 +131,13 @@ public:
         if (result.error()) return;
         auto doc = std::move(result.value());
 
-        OMSEvent* slot = client_.get_ring_slot();
+        OMSEvent* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
+
         if (!slot) return;
         *slot = {};
         slot->type   = OMSEventType::Wallet;
@@ -130,7 +148,12 @@ public:
         if (doc.get_object().get(obj)) return;
         parseWallet(obj, *slot);
         printWallet(*slot);
-        client_.commit_to_ring();
+        
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
+        
     }
 
     void onSubscribe() {

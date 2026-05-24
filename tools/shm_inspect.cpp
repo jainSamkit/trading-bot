@@ -1,9 +1,15 @@
-// shm_inspect — attaches to /trading_bot_state and prints live snapshots + trades.
+// shm_inspect — attaches to /trading_bot_state and prints live snapshots.
 // Build: cmake --build build --target shm_inspect
 // Run:   ./build/shm_inspect      (while the trading bot is running)
 //
 // This is a *separate process*, not forked from main. It uses ShmOwner::attach()
 // to map the existing SHM region into its own address space.
+//
+// NOTE: the trade ring is intentionally NOT observed here. SpmcRing now uses a
+// shared-tail CAS design — any reader (including this tool) would advance the
+// tail and steal trades from the real consumer (MarketState). Snapshots
+// (market_state / mark_prices / spot_prices) use a separate SeqLock-style read
+// that's side-effect-free, so polling them from this tool is safe.
 
 #include "ipc/shm.hpp"
 #include "ipc/shared_state.hpp"
@@ -42,10 +48,6 @@ int main(int argc, char** argv) {
               << " poll=" << poll_ms << "ms\n"
               << "----------------------------------------\n";
 
-    // Independent producer-relative cursor for the trade ring.
-    // Start from "current head" so we don't dump historical trades on startup.
-    uint64_t trade_cursor = state->trade_ring.get_producer_seq() + 1;
-
     // Per-instrument last-seen state so we only print on change.
     uint64_t last_market_seq [SharedState::MAX_INSTRUMENTS]{};
     uint64_t last_mark_ts    [SharedState::MAX_INSTRUMENTS]{};
@@ -54,27 +56,6 @@ int main(int argc, char** argv) {
     auto next_log = std::chrono::steady_clock::now();
 
     while (running.load(std::memory_order_relaxed)) {
-        // ── Trade ring: drain everything new ─────────────────────────────────
-        TradeEntry te;
-        size_t drained = 0;
-        while (true) {
-            auto v = state->trade_ring.try_read(trade_cursor);
-            if (!v) break;
-            te = *v;
-            ++drained;
-            std::cout << "[trade] ts=" << te.timestamp
-                      << " inst=" << static_cast<int>(te.instrument_id)
-                      << " tick=" << to_int(te.tick)
-                      << " size=" << to_int(te.size)
-                      << "\n";
-        }
-        if (state->trade_ring.is_lapped(trade_cursor)) {
-            const uint64_t head = state->trade_ring.get_producer_seq();
-            std::cout << "[trade] LAPPED — fast-forwarding cursor "
-                      << trade_cursor << " -> " << head + 1 << "\n";
-            trade_cursor = head + 1;
-        }
-
         // ── Snapshots: print only on seq/ts change ───────────────────────────
         const auto now = std::chrono::steady_clock::now();
         const bool periodic_log = (now >= next_log);

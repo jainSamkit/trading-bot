@@ -5,11 +5,13 @@
 
 class MarkSession : public Session<MarkSession, DeltaWebsocketClient> {
 public:
+    static constexpr latency::TagSet::MsgType MSG_TYPE = latency::TagSet::MsgType::Mark;
     static constexpr SessionType session_type = SessionType::Public;
+    using Span = latency::Span;
 
     explicit MarkSession(DeltaWebsocketClient& client, SessionID sessionID)
         : Session<MarkSession, DeltaWebsocketClient>(client, sessionID) {}
-        
+
     static double toDouble(std::string_view sv) {
         double val = 0.0;
         ::std::from_chars(sv.data(), sv.data() + sv.size(), val);
@@ -18,7 +20,13 @@ public:
 
     void onMessage(std::string_view msg) {  // was: unnamed parameter
         // std::cout<<"[raw msg]: "<<msg<<'\n';
-        FeedMessage* slot = client_.get_ring_slot();
+
+        FeedMessage* slot;
+        {
+            Span s(ringwait_hist_);
+            slot = client_.get_ring_slot();
+        }
+
         slot->type = FeedMessage::Type::MarkPrice;
         auto& mark_price_slot = slot->mark_price_data;
         mark_price_slot = MarkPriceData{};
@@ -48,11 +56,14 @@ public:
 
         if (mark_price_slot.instrument_id == UINT8_MAX) return;
 
-        slot->t_kernel = parser_.t_kernel;
+        slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
         slot->t_parse  = now_ns();
         slot -> instrument_id = mark_price_slot.instrument_id;
-        client_.commit_to_ring();
+        {
+            Span s(ringpush_hist_);
+            client_.commit_to_ring();
+        }
     }
 
     void onAuth() {}

@@ -22,7 +22,7 @@ class SpotSession;
 
 class DeltaWebsocketClient : public WebSocketClient<DeltaWebsocketClient> {
     static constexpr size_t FEED_RING_SIZE = cfg::FEED_RING_SIZE;
-    
+
 public:
     DeltaWebsocketClient(const char* host, int port, const char* path,
                          const ProductTable& products, SpscRing<FeedMessage,FEED_RING_SIZE>* const ring, const ProductGroup& product_groups);

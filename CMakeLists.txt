@@ -4,8 +4,24 @@ project(trading_bit CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Export compile_commands.json so clangd / IDE tooling sees the same standard + flags
+# as the actual build. Without this, clangd analyzes headers in isolation with its own
+# default standard (often C++14) and emits spurious "C++17 extension" warnings.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Omit -march=native and -flto (Docker/CI-friendly; LTO can fail in some container link setups).
 option(PORTABLE_RELEASE "Release: -O3 only (no -march=native/-flto)" OFF)
+
+# Force clock_gettime backend for environments where TSC is unreliable (Docker-on-Mac,
+# ARM, virtualized hosts with non-invariant TSC). Production AWS Linux x86_64 uses
+# rdtscp by default (this option OFF).
+option(LATENCY_FORCE_CLOCK_GETTIME "Force clock_gettime backend in latency module" OFF)
+if(LATENCY_FORCE_CLOCK_GETTIME)
+    add_compile_definitions(LATENCY_FORCE_CLOCK_GETTIME=1)
+    message(STATUS "Latency backend: clock_gettime (forced)")
+else()
+    message(STATUS "Latency backend: rdtscp (compile-time default; auto-aborts if TSC unreliable)")
+endif()
 
 # ── Build types ────────────────────────────────────────────────────────────────
 # Release:          cmake -DCMAKE_BUILD_TYPE=Release ..
@@ -97,6 +113,36 @@ add_executable(oms_test tests/main_oms_test.cpp ${BOT_SOURCES})
 # No bot sources needed — pure header-only consumer of SharedState.
 add_executable(shm_inspect tools/shm_inspect.cpp)
 target_link_libraries(shm_inspect PRIVATE Threads::Threads rt)
+
+# ── Latency module smoke test ─────────────────────────────────────────────────
+# Tiny binary that exercises src/latency/clock.hpp end-to-end. Run:
+#   cmake --build build --target latency_smoke
+#   ./build/latency_smoke
+# Validates calibrate(), now_cycles(), cycles_to_ns() on the local CPU.
+if(EXISTS ${CMAKE_SOURCE_DIR}/tests/test_clock_smoke.cpp)
+    add_executable(latency_smoke tests/test_clock_smoke.cpp)
+    target_link_libraries(latency_smoke PRIVATE Threads::Threads)
+endif()
+
+if(EXISTS ${CMAKE_SOURCE_DIR}/tests/test_histogram.cpp)
+    add_executable(latency_histogram tests/test_histogram.cpp)
+    target_link_libraries(latency_histogram PRIVATE Threads::Threads)
+endif()
+
+if(EXISTS ${CMAKE_SOURCE_DIR}/tests/test_registry.cpp)
+    add_executable(latency_registry tests/test_registry.cpp)
+    target_link_libraries(latency_registry PRIVATE
+        Threads::Threads
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        httplib::httplib
+    )
+endif()
+
+if(EXISTS ${CMAKE_SOURCE_DIR}/tests/test_span.cpp)
+    add_executable(latency_span tests/test_span.cpp)
+    target_link_libraries(latency_span PRIVATE Threads::Threads)
+endif()
 
 foreach(tgt trading_bot oms_test)
     target_link_libraries(${tgt} PRIVATE

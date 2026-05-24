@@ -13,6 +13,18 @@
 #
 # Stop:
 #   docker compose down
+#
+# ── Latency observability stack (Block D) ─────────────────────────────────────
+# InfluxDB v2 + Grafana run alongside the bot. They get their org/bucket/token
+# from the env block below — those must match the values in .env that the bot
+# reads at runtime. Edit BOTH places if you change any of them.
+#
+# Hostnames inside the compose network:
+#   - bot → InfluxDB: http://influxdb:8086        (use INFLUX_HOST=influxdb)
+#   - Grafana → InfluxDB: http://influxdb:8086    (provisioned datasource)
+# From the macOS host:
+#   - Grafana UI: http://localhost:3000   (admin / admin)
+#   - InfluxDB UI: http://localhost:8086  (admin / admin-pass-please-change)
 
 services:
   trading-bot:
@@ -34,4 +46,46 @@ services:
     restart: "no"
     environment:
       - TZ=UTC
+    depends_on:
+      - influxdb
     command: sleep infinity
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: trading-bot-influxdb
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    environment:
+      # First-run setup — only runs once, then persisted to influxdb-data volume.
+      # To reset everything (new token etc.): docker compose down -v
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin-pass-please-change
+      DOCKER_INFLUXDB_INIT_ORG: trading
+      DOCKER_INFLUXDB_INIT_BUCKET: latency
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: dev-trading-bot-token
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: trading-bot-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    depends_on:
+      - influxdb
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  grafana-data:
