@@ -18,6 +18,6 @@ class LatencyStats {
     int count_ = 0;
 
 public:
-    void record(int64_t t_recv_userspace, int64_t t_frame, int64_t t_parse, int64_t t_consume);
+    void record(uint64_t t_recv_userspace, uint64_t t_frame, uint64_t t_parse, uint64_t t_consume);
     void print() const;
 };

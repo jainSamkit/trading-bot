@@ -25,7 +25,7 @@ public:
 
     void onSnapshot(L2Update const& msg);
     void onUpdate(L2Update const& msg);
-    void update(L2Update const& msg);
+    void update(L2Update const& msg, uint64_t t_recv_ns);
 
     // ── Display (double) — computed from tick + contrats; never stored in the book ─
 

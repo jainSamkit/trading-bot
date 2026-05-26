@@ -179,7 +179,6 @@ public:
     }
 
     void onMessage(std::string_view msg) {
-        // std::cout<<"[order raw msg]: "<<msg<<'\n';
         if (msg.find(R"("subscriptions")") != std::string_view::npos) return;
 
         simdjson::ondemand::parser& parser = client_.get_parser();
@@ -300,7 +299,6 @@ public:
     }
 
     void onSubscribe() {
-
         orderSeq_.fill(0);
         push_signal(OMSSignal::OrdersInvalid);
         in_snapshot_ = true;
@@ -310,7 +308,8 @@ public:
             + channel_
             + R"(","symbols":["all"]}]}})";
 
-        // std::cout << msg << "\n";
+            
+        std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaOMSWebsocketClient::HEARTBEAT_TIMEOUT_MS);

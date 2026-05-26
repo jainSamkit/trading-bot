@@ -56,5 +56,5 @@ class SpmcRing {
     private:
         alignas(64) std::atomic<uint64_t> head_;
         alignas(64) std::atomic<uint64_t> tail_;
-        std::array<Slot, N> buffer_;
+        alignas(64) std::array<Slot, N> buffer_;
 };

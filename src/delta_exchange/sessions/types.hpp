@@ -70,9 +70,9 @@ struct OHLCData {
 struct FeedMessage {
     enum Type : uint8_t {L2Feed, MarkPrice, Trade, OHLC, SpotPrice} type;
     uint8_t  instrument_id;
-    int64_t  t_recv_userspace = 0;   // ns: after SSL_read
-    int64_t  t_frame  = 0;   // ns: after WS frame assembled
-    int64_t  t_parse  = 0;   // ns: after JSON parse + tick convert
+    uint64_t  t_recv_userspace = 0;   // ns: after SSL_read
+    uint64_t  t_frame  = 0;   // ns: after WS frame assembled
+    uint64_t  t_parse  = 0;   // ns: after JSON parse + tick convert
     union {
         L2Update       l2;
         MarkPriceData  mark_price_data;

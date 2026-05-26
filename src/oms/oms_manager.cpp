@@ -189,6 +189,8 @@ void OrderStateManager::handle_signal(const OMSEvent& event) {
 // ─── handle_order ─────────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_order(const OMSEvent& event) {
+
+    std::cout<<"I have got order"<<"\n";
     char buf[768];
     const char* src = oms_audit::src_str(event.source);
 
@@ -321,6 +323,8 @@ void OrderStateManager::handle_order(const OMSEvent& event) {
 // ─── handle_stop_order ────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_stop_order(const OMSEvent& event) {
+
+    std::cout<<"I have got stop order"<<"\n";
     char buf[768];
     const char* src = oms_audit::src_str(event.source);
 
@@ -458,6 +462,8 @@ void OrderStateManager::handle_stop_order(const OMSEvent& event) {
 // ─── handle_position ─────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_position(const OMSEvent& event) {
+
+    std::cout<<"I have got position"<<"\n";
     char buf[768];
     const char* src = oms_audit::src_str(event.source);
 
@@ -532,6 +538,9 @@ void OrderStateManager::handle_fill(const OMSEvent& event) {
 // ─── handle_wallet ────────────────────────────────────────────────────────────
 
 void OrderStateManager::handle_wallet(const OMSEvent& event) {
+
+    std::cout<<"I have got wallet"<<"\n";
+
     char buf[512];
     const char* src = oms_audit::src_str(event.source);
 

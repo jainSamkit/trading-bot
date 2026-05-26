@@ -6,9 +6,14 @@ namespace cfg {
     inline constexpr size_t MAX_FEED_LEVELS      = 16;
     inline constexpr size_t SNAPSHOT_DEPTH       = 10;
     inline constexpr size_t TRADE_RING_SIZE      = 64;
+    inline constexpr size_t INTENT_RING_SIZE     = 64;
     inline constexpr size_t FEED_RING_SIZE       = 64;
     inline constexpr size_t MAX_INSTRUMENTS      = 64;
     inline constexpr size_t OMS_RING_SIZE        = 64;
+}
+
+namespace cfg::execution_manager {
+    inline constexpr size_t CONN_POOL_SIZE       = 5;
 }
 
 // ── Delta Exchange hosts ─────────────────────────────────────────────────────

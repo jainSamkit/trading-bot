@@ -2,14 +2,17 @@
 
 #include <array>
 #include <atomic>
+#include <concepts>
+#include <memory>
 #include <stdexcept>
-#include <transport/http_client.hpp"
+#include <utility>
+#include "transport/http_client.hpp"
 
 template<typename ClientT, size_t N = 3>
-requires std::derived_from(ClientT, TcpClient) 
-
+requires std::derived_from<ClientT, TcpClient>
 class ConnectionPool {
 
+public:
     template<typename... Args>
     explicit ConnectionPool(Args&&... args) {
         for (auto& slot: slots_) {
@@ -27,9 +30,9 @@ class ConnectionPool {
         const size_t start = counter_.fetch_add(1, std::memory_order_relaxed) % N;
         for(size_t i = 0; i<N ; ++i) {
             auto& slot = slots_[(start + i) % N ];
-            if(slot.healthy) return *(slot.client);
+            if(slot.healthy) return *(slot.client_);
         }
-        
+
         slots_[0].healthy = slots_[0].client_->connect();
         if(slots_[0].healthy) return *slots_[0].client_;
         throw std::runtime_error("connection pool exhausted");
@@ -37,7 +40,7 @@ class ConnectionPool {
 
     void mark_unhealthy(ClientT& client) {
         for (auto& slot : slots_)
-            if (slot.client.get() == &client)
+            if (slot.client_.get() == &client)
                 slot.healthy = false;
     }
 
@@ -49,4 +52,4 @@ class ConnectionPool {
 
         std::array<Slot, N> slots_;
         std::atomic<size_t> counter_{0};
-}
+};

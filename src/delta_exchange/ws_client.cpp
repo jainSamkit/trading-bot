@@ -151,9 +151,11 @@ void DeltaWebsocketClient::onsessionDelete(SessionCtx& ctx) {
 }
 
 bool DeltaWebsocketClient::shutdown() {
+    if(shutdown_) return true;
+    
     uint64_t one = 1;
     if (write(efd_, &one, sizeof(one)) != sizeof(one)) {
-        perror("eventfd write");
+        perror("eventfd write non oms");
         return false;
     }
     return true;

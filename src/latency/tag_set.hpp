@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/venue.hpp"
 #include <cstdint>
 #include <tuple>
 
@@ -7,12 +8,12 @@ namespace latency {
 
 struct TagSet {
 
+    using Venue = core::Venue;
+
     enum class EventType : uint8_t {
         WsRead, WsFrame, JsonParse, RingPush, RingWait,
-        Handler, ShmWrite, BookUpdate, TradeRingPush
+        Handler, ShmWrite, BookUpdate, TradeRingPush, WireOut, TickToTrade
     };
-
-    enum class Venue : uint8_t { Delta, Bybit };
 
     enum class MsgType : uint8_t {
         None,        // for stages that don't have a per-msg breakdown
@@ -43,15 +44,17 @@ struct TagSet {
     // ── Static stringifiers — NOT `const` (static functions cannot be cv-qualified) ──
     static const char* to_string(EventType e) noexcept {
         switch (e) {
-            case EventType::WsRead:        return "ws_read";
-            case EventType::WsFrame:       return "ws_frame";
-            case EventType::JsonParse:     return "json_parse";
-            case EventType::RingPush:      return "ring_push";
-            case EventType::RingWait:      return "ring_wait";
-            case EventType::Handler:       return "handler";
-            case EventType::ShmWrite:      return "shm_write";
-            case EventType::BookUpdate:    return "book_update";
-            case EventType::TradeRingPush: return "trade_ring_push";
+            case EventType::WsRead:         return "ws_read";
+            case EventType::WsFrame:        return "ws_frame";
+            case EventType::JsonParse:      return "json_parse";
+            case EventType::RingPush:       return "ring_push";
+            case EventType::RingWait:       return "ring_wait";
+            case EventType::Handler:        return "handler";
+            case EventType::ShmWrite:       return "shm_write";
+            case EventType::BookUpdate:     return "book_update";
+            case EventType::TradeRingPush:  return "trade_ring_push";
+            case EventType::WireOut:        return "wire_out";
+            case EventType::TickToTrade:    return "tick_to_trade";
         }
         return "unknown";
     }
@@ -83,9 +86,10 @@ struct TagSet {
     }
 
     static const char* to_string(Venue v) noexcept {
-        switch (v) {
+        switch(v) {
             case Venue::Delta: return "delta";
             case Venue::Bybit: return "bybit";
+            case Venue::Count: return "unknown";
         }
         return "unknown";
     }

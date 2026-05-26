@@ -316,7 +316,7 @@ public:
         std::string msg =
             R"({"type":"subscribe","payload":{"channels":[{"name":"positions","symbols":["all"]},{"name":"v2/user_trades","symbols":["all"]}]}})";
 
-        // std::cout << msg << "\n";
+        std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);
         arm_timer_ms(DeltaOMSWebsocketClient::HEARTBEAT_TIMEOUT_MS);

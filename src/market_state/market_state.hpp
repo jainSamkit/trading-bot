@@ -2,6 +2,7 @@
 #include "core/spsc_ring.hpp"
 #include "core/spmc_ring.hpp"
 #include "core/snapshots.hpp"
+#include "core/cpu_relax.hpp"
 #include "config/config.hpp"
 #include "core/orderbook/orderbook.hpp"
 #include "delta_exchange/sessions/types.hpp"
@@ -11,6 +12,7 @@
 #include "market_state/ohlc_ring.hpp"
 #include "latency/registry.hpp"      // brings histogram + tag_set transitively
 #include "latency/span.hpp"
+#include "core/venue.hpp"
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -76,7 +78,7 @@ class MarketState {
     using Histogram = latency::Histogram;
 public:
     explicit MarketState(SpscRing<FeedMessage, FEED_RING_SIZE>* const feed_ring, 
-        SharedState* const shared_state, const ProductTable& products, const ProductGroup& product_group);
+        SharedState* const shared_state, const ProductTable& products, const ProductGroup& product_group, const core::Venue venue);
 
     void run(std::atomic<bool>& running);
 
@@ -176,6 +178,7 @@ private:
     SharedState* const                                          shared_state_;
     const ProductTable&                                         products_;
     const ProductGroup&                                         product_group_;
+    const core::Venue                                           venue_;
     OrderBook                                                   orderbooks_[MAX_INSTRUMENTS]{};
     bool                                                        orderbook_init_[MAX_INSTRUMENTS]{};
     MarkPriceData                                               mark_prices_[MAX_INSTRUMENTS]{};

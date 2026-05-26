@@ -26,12 +26,6 @@
 #include "latency/span.hpp"
 #include "latency/registry.hpp"
 
-static inline int64_t now_ns() {
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    return ts.tv_sec * 1'000'000'000LL + ts.tv_nsec;
-}
-
 #ifndef be64toh
 #if defined(__APPLE__)
 #include <libkern/OSByteOrder.h>
@@ -161,8 +155,8 @@ struct WSParser {
     // User-space wall-clock taken IMMEDIATELY after SSL_read returns > 0.
     // NOT a kernel/NIC timestamp — that would require SO_TIMESTAMPING at the
     // recvmsg layer (incompatible with OpenSSL's read path). See task #29.
-    int64_t t_recv_userspace = 0;
-    int64_t t_frame          = 0;   // set by dispatch() when frame is fully assembled
+    uint64_t t_recv_userspace = 0;
+    uint64_t t_frame          = 0;   // set by dispatch() when frame is fully assembled
 
     template<typename Callback>
     void feed(const uint8_t* data, size_t len, Callback&& on_frame)
@@ -259,7 +253,7 @@ struct WSParser {
 
     template<typename Callback>
     void dispatch(Callback&& on_frame) {
-        t_frame = now_ns();
+        t_frame = latency::now_cycles();
         std::string_view payload((char*)payload_.data(), payload_len_);
 
         // control frames — never fragmented, deliver immediately
@@ -334,6 +328,13 @@ struct WebSocketClient {
         // SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
         // SSL_CTX_set_default_verify_paths(ctx);
         SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+
+        // Exchanges (Delta, Bybit, …) commonly close the TCP socket without a
+        // TLS close_notify alert. OpenSSL 3.0+ raises SSL_R_UNEXPECTED_EOF_WHILE_READING
+        // for that. This option treats unexpected-eof as a clean close — surfaces
+        // as SSL_ERROR_ZERO_RETURN, which our drain loop already handles cleanly
+        // (logs "server closed TLS", queues reconnect, no OpenSSL error dump).
+        SSL_CTX_set_options(ctx, SSL_OP_IGNORE_UNEXPECTED_EOF);
 
         return true;
     }
@@ -546,7 +547,7 @@ struct WebSocketClient {
                 // stamped immediately after SSL_read: post TCP-recv + TLS decrypt,
                 // before frame assembly. True kernel/NIC timestamps require recvmsg
                 // ancillary data below the SSL layer (kernel bypass or AF_XDP).
-                session.parser_.t_recv_userspace = now_ns();
+                session.parser_.t_recv_userspace = latency::now_ns();
                 {
                     latency::Span s(wsframe_hist_);
                     session.parser_.feed(buf, static_cast<size_t>(r),

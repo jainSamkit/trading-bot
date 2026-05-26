@@ -3,7 +3,7 @@
 #include <iomanip>
 #include <iostream>
 
-void LatencyStats::record(int64_t t_recv_userspace, int64_t t_frame, int64_t t_parse, int64_t t_consume) {
+void LatencyStats::record(uint64_t t_recv_userspace, uint64_t t_frame, uint64_t t_parse, uint64_t t_consume) {
     if (t_recv_userspace == 0 || t_parse == 0) return;
     buf_[count_ % N] = {
         static_cast<int32_t>(t_parse   - t_recv_userspace),

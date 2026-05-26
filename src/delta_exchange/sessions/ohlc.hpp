@@ -76,7 +76,7 @@ public:
 
         slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
-        slot->t_parse  = now_ns();
+        slot->t_parse  = latency::now_ns();
 
         {
             Span s(ringpush_hist_);

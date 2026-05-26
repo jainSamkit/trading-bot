@@ -30,6 +30,18 @@ class SeqLock {
             }
         }
 
+        uint64_t peek_seq_no() {
+            uint64_t seq_no;
+            while (true) {
+                const uint64_t s1 = counter_.load(std::memory_order_acquire);
+                if (s1 & 1) continue;                       // writer in progress; retry
+                std::memcpy(&seq_no, &data_.last_seq, sizeof(seq_no));
+                std::atomic_thread_fence(std::memory_order_acquire);
+                const uint64_t s2 = counter_.load(std::memory_order_relaxed);
+                if (s1 == s2) return seq_no;                   // consistent snapshot
+            }
+        }
+
     private:
         alignas(64) std::atomic<uint64_t> counter_{0};
         alignas(64) T                     data_{};

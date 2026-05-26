@@ -116,7 +116,7 @@ inline std::string format_line(const TagSet& tags,
                                uint64_t      total) {
     std::string line = "latency,venue=";
     line += TagSet::to_string(venue);
-    line += ",event=";
+line += ",event=";
     line += TagSet::to_string(tags.event_type);
 
     if (const char* m = TagSet::to_string(tags.msg_type)) {

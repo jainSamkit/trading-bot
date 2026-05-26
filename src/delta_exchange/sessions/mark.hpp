@@ -58,7 +58,7 @@ public:
 
         slot->t_recv_userspace = parser_.t_recv_userspace;
         slot->t_frame  = parser_.t_frame;
-        slot->t_parse  = now_ns();
+        slot->t_parse  = latency::now_ns();
         slot -> instrument_id = mark_price_slot.instrument_id;
         {
             Span s(ringpush_hist_);

@@ -75,7 +75,6 @@ inline uint64_t now_ns() noexcept {
     return cycles_to_ns(now_cycles());
 }
 
-
 // ── Cold-path API ───────────────────────────────────────────────────────────
 
 inline void calibrate(int sample_ms = kDefaultSampleMs) {

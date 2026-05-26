@@ -2,6 +2,7 @@
 #include "market_state/market_state.hpp"
 #include "processes/feed.hpp"
 #include "processes/oms.hpp"
+#include "processes/strategy.hpp"
 #include "ipc/shm.hpp"
 #include "config/env.hpp"
 #include "latency/clock.hpp"
@@ -88,6 +89,7 @@ int main(int argc, char** argv)
     SharedState* state = shm_trading_bot.get();
 
     FeedConfig feed_cfg_ {
+
         .host = delta_ws_public_host,
         .port = 443,
         .path = "/",
@@ -103,7 +105,7 @@ int main(int argc, char** argv)
 
     FeedProcess<DeltaWebsocketClient> btc_feed {
         products, btc_group, state, feed_cfg_,
-        influx_config, latency::TagSet::Venue::Delta,
+        influx_config, core::Venue::Delta,
     };
     // FeedProcess<DeltaWebsocketClient> eth_feed {products, eth_group, state, cfg};
 
@@ -111,15 +113,21 @@ int main(int argc, char** argv)
     // ── OMS (private session) ─────────────────────────────────────────────
     // Credentials come from .env via DELTA_API_KEY / DELTA_API_SECRET.
     // Host is testnet or prod depending on DELTA_WS_PRIVATE_HOST.
-    //
-    // OMSConfig oms_cfg_ {
-    //     .host       = delta_ws_private_host,
-    //     .port       = 443,
-    //     .path       = "/",
-    //     .api_key    = env::require("DELTA_API_KEY"),
-    //     .api_secret = env::require("DELTA_API_SECRET"),
-    // };
-    // OmsProcess<DeltaOMSWebsocketClient, DeltaRestClient> oms_delta {products, oms_cfg_};
+    
+    OMSConfig oms_cfg_ {
+        .ws_host       = delta_ws_private_host,
+        .rest_host     = delta_rest_host,
+        .port       = 443,
+        .path       = "/",
+        .api_key    = env::require("DELTA_API_KEY"),
+        .api_secret = env::require("DELTA_API_SECRET"),
+    };
+
+    OmsProcess<DeltaOMSWebsocketClient, DeltaRestClient> oms_delta {products, btc_group, influx_config, oms_cfg_, state, ExecMode::Shadow, core::Venue::Delta};
+
+    // ── Strategy (reads market_state SHM, emits ExecutionIntents) ─────────────
+    Strategy strategy_delta {products, btc_group, state, core::Venue::Delta};
+
     std::vector<FeedProcess<DeltaWebsocketClient>*> feeds;
 
     feeds.push_back(&btc_feed);
@@ -136,13 +144,21 @@ int main(int argc, char** argv)
         g_child_pids.push_back(pid);
     }
 
-    // pid_t pid = fork();
-    // if(pid == 0) {
-    //     oms_delta.start();
-    //     return 0;
-    // }
+    pid_t pid = fork();
+    if(pid == 0) {
+        oms_delta.start();
+        return 0;
+    }
 
-    // g_child_pids.push_back(pid);
+    g_child_pids.push_back(pid);
+
+    pid_t strat_pid = fork();
+    if(strat_pid == 0) {
+        strategy_delta.start();
+        return 0;
+    }
+
+    g_child_pids.push_back(strat_pid);
 
     std::signal(SIGINT, on_shutdown_signal);
     std::signal(SIGTERM, on_shutdown_signal);
