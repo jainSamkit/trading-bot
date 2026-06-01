@@ -10,9 +10,10 @@
 #include <pthread.h>
 #include <sched.h>                                                                                                                                                                                                                                                                             
                                         
-#include "latency/histogram.hpp"                                                                                                                                                                                                                                                               
-#include "latency/tag_set.hpp"                   
+#include "latency/histogram.hpp"
+#include "latency/tag_set.hpp"
 #include "latency/influx_writer.hpp"
+#include "config/config.hpp"
 
 namespace latency {
 
@@ -38,12 +39,34 @@ namespace latency {
                 //run this inside a thread
                 push_thread_ = std::thread([writer, interval_s, pin_to_core]() {
 
-                    if (pin_to_core >= 0) {                                                                                                                                                                                                                                                                
-                        cpu_set_t cpuset;                                                                                                                                                                                                                                                                  
-                        CPU_ZERO(&cpuset);                                                                                                                                                                                                                                                                 
-                        CPU_SET(pin_to_core, &cpuset);                  
-                        pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);                                                                                                                                                                                                                   
-                    }  
+                        // ── Defeat inherited hot-thread scheduling ──────────────
+                        // pthread_create defaults to PTHREAD_INHERIT_SCHED, so a
+                        // push thread spawned by a SCHED_FIFO busy-spin parent
+                        // also runs SCHED_FIFO at the same priority — and is then
+                        // starved indefinitely because the parent never blocks.
+                        // Reset to plain CFS (SCHED_OTHER) and pin to housekeeping
+                        // cores (0–1) so we share with the OS, not the hot path.
+                        // macOS no-ops both calls (no SCHED_FIFO inheritance to
+                        // worry about there anyway).
+                    #if defined(__linux__)
+                        sched_param sp_other{};      // prio 0 — required for SCHED_OTHER
+                        pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp_other);
+
+                        cpu_set_t hk_set;
+                        CPU_ZERO(&hk_set);
+                        CPU_SET(cfg::cpu::HOUSEKEEPING_CORE_LO, &hk_set);
+                        CPU_SET(cfg::cpu::HOUSEKEEPING_CORE_HI, &hk_set);
+                        pthread_setaffinity_np(pthread_self(), sizeof(hk_set), &hk_set);
+                    #endif
+
+                    if (pin_to_core >= 0) {
+                        // Explicit override still respected if caller passes
+                        // a specific core — e.g. for benchmarks.
+                        cpu_set_t cpuset;
+                        CPU_ZERO(&cpuset);
+                        CPU_SET(pin_to_core, &cpuset);
+                        pthread_setaffinity_np(pthread_self(), sizeof(cpuset), &cpuset);
+                    }
 
                     while(running_.load(std::memory_order_relaxed)) {
                         std::this_thread::sleep_for(std::chrono::seconds(interval_s));

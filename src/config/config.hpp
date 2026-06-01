@@ -36,3 +36,32 @@ namespace cfg::delta_exchange::prod {
 namespace latency {
     inline constexpr int PUSH_INTERVAL_SECONDS = 10;
 }
+
+// ── CPU pinning layout ───────────────────────────────────────────────────────
+// Logical CPU IDs as reported by /proc/cpuinfo / taskset.
+//
+// Target: c7gn.2xlarge (8 physical Graviton cores, no SMT) in AWS Tokyo.
+// Cores 0-1 are NOT isolated — they run the OS, IRQs, and the background
+// InfluxWriter push threads. Hot threads go on isolated cores 2-7.
+//
+// Boot the host with:
+//   isolcpus=2,3,4,5,6,7 nohz_full=2,3,4,5,6,7 rcu_nocbs=2,3,4,5,6,7
+// and move IRQs to cores 0-1 via /proc/irq/*/smp_affinity.
+//
+// On c7i.2xlarge (4 physical Intel + HT), cores 6,7 don't exist — adjust
+// down to a 4-physical layout if you fall back to Intel.
+namespace cfg::cpu {
+    inline constexpr int FEED_REACTOR_CORE     = 2;   // WS read + frame decode + parse
+    inline constexpr int FEED_MARKET_CORE      = 3;   // MarketState::run busy-spin
+    inline constexpr int STRATEGY_CORE         = 4;   // Strategy::run busy-spin
+    inline constexpr int OMS_EXEC_CORE         = 5;   // ExecutionManager::run busy-spin
+    // 6, 7 reserved for Bybit feed (reactor + market_state) once that lands.
+
+    // Cores that the OS, IRQs, and background threads (e.g. InfluxWriter push)
+    // run on. NOT in the isolcpus set — kernel CFS schedules them normally.
+    inline constexpr int HOUSEKEEPING_CORE_LO  = 0;
+    inline constexpr int HOUSEKEEPING_CORE_HI  = 1;
+
+    // SCHED_FIFO priority for hot threads. Requires CAP_SYS_NICE (root on EC2).
+    inline constexpr int RT_PRIORITY           = 50;
+}

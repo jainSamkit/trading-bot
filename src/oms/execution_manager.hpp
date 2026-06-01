@@ -45,17 +45,20 @@ class ExecutionManager {
             any_work = true;
             {
                 Span s(wireout_hist_);
-                RestClient& client = conn_pool_.get_next();
-                auto handler = kHandlers[static_cast<uint8_t>(intent->action)];
                 if(exec_mode_ == ExecMode::Live) {
+                    RestClient& client = conn_pool_.get_next();
+                    auto handler = kHandlers[static_cast<uint8_t>(intent->action)];
                     (client.*handler)(*intent, oms_rest_ring_);
-                } else {
-                    log_shadow_intent(*intent);
+                // } else {
+                    
+                    // log_shadow_intent(*intent);
                 }
             }
 
             uint64_t tick_to_trade_ns = latency::now_ns() - intent->t_origin_ns;
+            uint64_t queue_time_ns = latency::now_ns() - intent->t_intent;
             tick_to_trade_hist_->record_ns(tick_to_trade_ns);
+            queue_time_hist_->record_ns(queue_time_ns);
             shared_state_->execution_intent_ring[static_cast<uint64_t>(venue_)].pop_commit();
         }
 
@@ -81,6 +84,7 @@ public:
         conn_pool_.connect_all();
         wireout_hist_ = Registry::get_or_create({.event_type = latency::TagSet::EventType::WireOut});
         tick_to_trade_hist_ = Registry::get_or_create({.event_type = latency::TagSet::EventType::TickToTrade});
+        queue_time_hist_ = Registry::get_or_create({.event_type = latency::TagSet::EventType::QueueTime, .target = latency::TagSet::Target::ExecutionManager});
     }
 
     void run(std::atomic<bool>& running_) {
@@ -101,4 +105,5 @@ private:
     core::Venue                                                                     venue_;
     Histogram*                                                                      wireout_hist_ = nullptr;
     Histogram*                                                                      tick_to_trade_hist_ = nullptr;
+    Histogram*                                                                      queue_time_hist_ = nullptr;
 };

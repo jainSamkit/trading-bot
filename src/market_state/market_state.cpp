@@ -15,6 +15,7 @@ MarketState::MarketState(SpscRing<FeedMessage, FEED_RING_SIZE>* const ring,
         ohlc_handler_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::Handler, .msg_type = latency::TagSet::MsgType::OHLC, .target = latency::TagSet::Target::MarketState});
         ringwait_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingWait, .target = latency::TagSet::Target::MarketState});
         ringpush_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::RingPush, .target = latency::TagSet::Target::MarketState});
+        queue_time_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::QueueTime, .target = latency::TagSet::Target::MarketState});
         l2_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::L2, .target = latency::TagSet::Target::MarketState});
         mark_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::Mark, .target = latency::TagSet::Target::MarketState});
         spot_shm_hist_ = latency::Registry::get_or_create({.event_type = latency::TagSet::EventType::ShmWrite, .msg_type = latency::TagSet::MsgType::Spot, .target = latency::TagSet::Target::MarketState});
@@ -52,7 +53,6 @@ void MarketState::handle_l2_update(const FeedMessage& msg) {
 
         orderbooks_[id].update(msg.l2, msg.t_recv_userspace);
         const MarketSnapshot& snapshot = orderbooks_[id].snapshot();
-        
         {
             Span s(l2_shm_hist_);
             shared_state_->market_state[static_cast<size_t>(venue_)][msg.instrument_id].write(snapshot);
@@ -68,9 +68,11 @@ void MarketState::handle_mark_price_data(const FeedMessage& msg) {
             mark_prices_[instrument_id] = msg.mark_price_data;
             MarkPriceSnapshot mark_price_snapshot {
                 .t_origin_ns = msg.t_recv_userspace, 
+                .t_shm_write = latency::now_ns(),
                 .last_update_ts_ns = msg.mark_price_data.timestamp,
                 .mark_price_tick   = products_[instrument_id].price_to_tick(msg.mark_price_data.price),
             };
+
             {
                 Span s(mark_shm_hist_);
                 shared_state_->mark_prices[static_cast<size_t>(venue_)][instrument_id].write(mark_price_snapshot);
@@ -87,6 +89,7 @@ void MarketState::handle_spot_price_data(const FeedMessage& msg) {
             spot_prices_[instrument_id] = msg.spot_price_data;
             SpotPriceSnapshot spot_price_snapshot {
                 .t_origin_ns = msg.t_recv_userspace,
+                .t_shm_write = latency::now_ns(),
                 .spot_price_tick   = products_[instrument_id].price_to_tick(msg.spot_price_data.price),
             };
             {
@@ -116,6 +119,7 @@ void MarketState::handle_trade_data(const FeedMessage& msg) {
 
         const TradeEntry trade_entry {
             .t_origin_ns   = msg.t_recv_userspace,
+            .t_shm_write   = latency::now_ns(),
             .timestamp     = tr.trade_time,
             .tick          = prod.price_to_tick(tr.price),
             .size          = prod.to_contracts(signed_size),
@@ -200,6 +204,7 @@ void MarketState::run(std::atomic<bool>& running) {
 
         const uint64_t t1 = latency::now_cycles();
         ringwait_hist_->record_cycles(t1-t0);
+        queue_time_hist_->record_ns(t1 - msg->t_parse);
 
         // const int64_t t_consume = ms_now_ns();
         // stats_.record(msg->t_recv_userspace, msg->t_frame, msg->t_parse, t_consume);

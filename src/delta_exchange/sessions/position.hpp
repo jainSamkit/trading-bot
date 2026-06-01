@@ -233,7 +233,7 @@ public:
             if(in_snapshot_) in_snapshot_ = false;
 
             fillSeq_[slot->fill.instrument_id] = seq_no;
-            printFill(*slot);
+            // printFill(*slot);
             {
                 Span s(ringpush_hist_);
                 client_.commit_to_ring();
@@ -268,7 +268,7 @@ public:
                     slot->source = OMSEventSource::Websocket;
                     slot->action = OMSAction::Create;
                     parsePosition(obj, *slot);
-                    printPosition(*slot);
+                    // printPosition(*slot);
                     {
                         Span s(ringpush_hist_);
                         client_.commit_to_ring();
@@ -300,7 +300,7 @@ public:
         simdjson::ondemand::object obj;
         if (doc.get_object().get(obj)) return;
         parsePosition(obj, *slot);
-        printPosition(*slot);
+        // printPosition(*slot);
 
         {
             Span s(ringpush_hist_);

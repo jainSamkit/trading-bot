@@ -9,12 +9,37 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <atomic>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <csignal>
 #include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__linux__)
+    #include <sys/mman.h>
+#endif
+
+// Pin all heap + stack pages into RAM and prevent any future allocations from
+// being swapped or demand-paged. Hot paths get a 200µs-1ms page-fault tail
+// otherwise — invisible at p50, dominant at p99.9. EPERM on macOS / non-root
+// is logged and ignored (best-effort; the rest of the run is still meaningful).
+static void try_mlockall() {
+#if defined(__linux__)
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        std::fprintf(stderr, "[main] WARN mlockall failed: %s "
+                             "(need CAP_IPC_LOCK / root, or raise RLIMIT_MEMLOCK)\n",
+                     std::strerror(errno));
+    } else {
+        std::fprintf(stderr, "[main] mlockall(MCL_CURRENT|MCL_FUTURE) OK\n");
+    }
+#else
+    std::fprintf(stderr, "[main] mlockall skipped (non-Linux)\n");
+#endif
+}
 
 
 // Signal handlers only receive int sig — store PIDs in process-global state.
@@ -55,6 +80,10 @@ int main(int argc, char** argv)
     // Load .env from cwd (no error if missing — real shell env still works).
     // Shell env wins over .env values (overwrite=0 inside the loader).
     env::load_file(".env");
+
+    // Pin pages BEFORE fork so children inherit the locked state. Doing it
+    // post-fork would force each child to lock its own COW pages individually.
+    try_mlockall();
 
     // Calibrate the latency clock ONCE in the parent, BEFORE fork(). Each
     // child inherits the calibrated ns_per_cycle via COW; otherwise every
@@ -126,7 +155,7 @@ int main(int argc, char** argv)
     OmsProcess<DeltaOMSWebsocketClient, DeltaRestClient> oms_delta {products, btc_group, influx_config, oms_cfg_, state, ExecMode::Shadow, core::Venue::Delta};
 
     // ── Strategy (reads market_state SHM, emits ExecutionIntents) ─────────────
-    Strategy strategy_delta {products, btc_group, state, core::Venue::Delta};
+    Strategy strategy_delta {products, btc_group, influx_config, state, core::Venue::Delta};
 
     std::vector<FeedProcess<DeltaWebsocketClient>*> feeds;
 

@@ -32,7 +32,7 @@ struct CreateOrderIntent {
     bool                                        is_stop_order = false;
     ExecutionStopOrderType                      stop_order_type = ExecutionStopOrderType::TP;
     ExecutionStopOrderTriggerMethod             stop_order_trigger_method = ExecutionStopOrderTriggerMethod::Mark;
-    double                                      stop_price;
+    double                                      stop_price = 0.0;
 };
 
 struct EditOrderIntent {
@@ -68,6 +68,7 @@ struct ExecutionIntent {
     ExecutionIntent() {}    // union members have non-trivial ctors; caller sets action before use
     ExecutionAction                             action;
     uint64_t                                    t_origin_ns = 0;
+    uint64_t                                    t_intent = 0; //time at which intent was pushed to intent ring
     union {
         CreateOrderIntent                       create_order_intent; //place order
         EditOrderIntent                         edit_order_intent;

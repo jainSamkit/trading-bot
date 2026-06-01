@@ -12,6 +12,7 @@ struct TickLevel {
 
 struct MarketSnapshot {
     uint64_t                                                t_origin_ns = 0;
+    uint64_t                                                t_shm_write = 0;
     std::array<TickLevel, cfg::SNAPSHOT_DEPTH>              asks = {};
     std::array<TickLevel, cfg::SNAPSHOT_DEPTH>              bids = {};
     uint64_t                                                last_seq = 0;
@@ -33,17 +34,20 @@ struct MarketSnapshot {
 
 struct MarkPriceSnapshot {
     uint64_t        t_origin_ns = 0;
+    uint64_t        t_shm_write = 0;
     uint64_t        last_update_ts_ns = 0;
     Tick            mark_price_tick{};
 };
 
 struct SpotPriceSnapshot {
     uint64_t        t_origin_ns = 0;
+    uint64_t        t_shm_write = 0;
     Tick            spot_price_tick{};
 };
 
 struct TradeEntry {
     uint64_t        t_origin_ns = 0;
+    uint64_t        t_shm_write = 0;
     uint64_t        timestamp   = 0;
     Tick            tick{};
     Contracts       size{};

@@ -32,7 +32,7 @@ class SpscRing {
             uint64_t head_cache = ring_.head_.load(std::memory_order_relaxed);
             uint64_t tail_cache = ring_.tail_.load(std::memory_order_acquire);
             while(head_cache -  tail_cache == N) {
-                std::cout<<"[push begin]: head == tail"<<'\n';
+                // std::cout<<"[push begin]: head == tail"<<'\n';
             };
 
             return static_cast<T*>(&buffer_[head_cache & (N-1)]);

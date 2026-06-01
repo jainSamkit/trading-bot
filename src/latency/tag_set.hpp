@@ -12,7 +12,8 @@ struct TagSet {
 
     enum class EventType : uint8_t {
         WsRead, WsFrame, JsonParse, RingPush, RingWait,
-        Handler, ShmWrite, BookUpdate, TradeRingPush, WireOut, TickToTrade
+        Handler, ShmWrite, BookUpdate, TradeRingPush, WireOut,
+        TickToTrade, QueueTime
     };
 
     enum class MsgType : uint8_t {
@@ -23,7 +24,7 @@ struct TagSet {
 
     enum class Target : uint8_t {
         None,        // for stages without a target
-        MarketState, Mark, Spot
+        MarketState, Mark, Spot, ExecutionManager, Strategy
     };
 
     EventType event_type;
@@ -49,6 +50,7 @@ struct TagSet {
             case EventType::JsonParse:      return "json_parse";
             case EventType::RingPush:       return "ring_push";
             case EventType::RingWait:       return "ring_wait";
+            case EventType::QueueTime:      return "queue_time";
             case EventType::Handler:        return "handler";
             case EventType::ShmWrite:       return "shm_write";
             case EventType::BookUpdate:     return "book_update";
@@ -79,6 +81,8 @@ struct TagSet {
         switch (t) {
             case Target::None:        return nullptr;
             case Target::MarketState: return "market_state";
+            case Target::ExecutionManager:        return "execution_manager";
+            case Target::Strategy:        return "strategy";
             case Target::Mark:        return "mark";
             case Target::Spot:        return "spot";
         }

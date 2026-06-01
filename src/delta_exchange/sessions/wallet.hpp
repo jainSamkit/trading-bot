@@ -147,7 +147,7 @@ public:
         simdjson::ondemand::object obj;
         if (doc.get_object().get(obj)) return;
         parseWallet(obj, *slot);
-        printWallet(*slot);
+        // printWallet(*slot);
         
         {
             Span s(ringpush_hist_);

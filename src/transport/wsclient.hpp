@@ -161,6 +161,7 @@ struct WSParser {
     template<typename Callback>
     void feed(const uint8_t* data, size_t len, Callback&& on_frame)
     {
+
         size_t i = 0;
         while (i < len) {
 
@@ -189,6 +190,7 @@ struct WSParser {
                             dispatch(on_frame);
                             state_   = State::Header;
                             hfilled_ = 0;
+
                         } else {
                             state_ = masked_ ? State::MaskKey
                                              : State::Payload;

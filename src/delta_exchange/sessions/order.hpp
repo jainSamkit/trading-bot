@@ -235,7 +235,7 @@ public:
                             slot->type = OMSEventType::StopOrder;
                         }
                         
-                        printOrder(*slot);
+                        // printOrder(*slot);
                         {
                             Span s(ringpush_hist_);
                             client_.commit_to_ring();
@@ -291,7 +291,7 @@ public:
 
         if(slot->order.client_order_id == 0) slot->order.client_order_id = slot->order.id;
 
-        printOrder(*slot);
+        // printOrder(*slot);
         {
             Span s(ringpush_hist_);
             client_.commit_to_ring();
@@ -308,7 +308,7 @@ public:
             + channel_
             + R"(","symbols":["all"]}]}})";
 
-            
+
         std::cout << msg << "\n";
         client_.ws_send(ctx_.ssl_, msg);
         client_.enable_heartbeat(ctx_.ssl_);

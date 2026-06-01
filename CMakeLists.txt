@@ -111,8 +111,17 @@ add_executable(oms_test tests/main_oms_test.cpp ${BOT_SOURCES})
 # ── Standalone tools ───────────────────────────────────────────────────────────
 # shm_inspect: attaches to /trading_bot_state and prints live snapshots + trades.
 # No bot sources needed — pure header-only consumer of SharedState.
-add_executable(shm_inspect tools/shm_inspect.cpp)
-target_link_libraries(shm_inspect PRIVATE Threads::Threads rt)
+#
+# Currently STALE: written against the pre-venue-aware SharedState layout
+# (commit 5ebab94 changed market_state to a [venue][instrument] 2D array and
+# removed SharedState::MAX_INSTRUMENTS). Gate it behind an option so the bot
+# build isn't blocked. Flip ON only after updating tools/shm_inspect.cpp to
+# the new layout.
+option(BUILD_SHM_INSPECT "Build the (currently stale) shm_inspect debugging tool" OFF)
+if(BUILD_SHM_INSPECT)
+    add_executable(shm_inspect tools/shm_inspect.cpp)
+    target_link_libraries(shm_inspect PRIVATE Threads::Threads rt)
+endif()
 
 # ── Latency module smoke test ─────────────────────────────────────────────────
 # Tiny binary that exercises src/latency/clock.hpp end-to-end. Run:

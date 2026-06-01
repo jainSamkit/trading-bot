@@ -208,9 +208,10 @@ inline void OrderBook::onUpdate(L2Update const& msg)
 
 inline void OrderBook::update(L2Update const& msg, uint64_t t_recv_ns) {
 
+    market_snapshot_.t_origin_ns = t_recv_ns;
+    market_snapshot_.t_shm_write = latency::now_ns();
     market_snapshot_.last_seq = msg.sequence_no;
     market_snapshot_.last_update_ts_ns = msg.timestamp;
-    market_snapshot_.t_origin_ns = t_recv_ns;
 
     if (msg.isSnapshot) {
         onSnapshot(msg);
@@ -267,6 +268,6 @@ inline const MarketSnapshot& OrderBook::snapshot()
     market_snapshot_.best_ask = bestAskTick();
     market_snapshot_.bestBidPlusAsk = bestBidPlusAsk();
     market_snapshot_.spread = spread();
-    
+
     return market_snapshot_;
 }

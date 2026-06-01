@@ -1,6 +1,7 @@
 #pragma once
 #include "core/spsc_ring.hpp"
 #include "core/spmc_ring.hpp"
+#include "core/cpu_pin.hpp"
 #include "config/config.hpp"
 #include "core/snapshots.hpp"
 #include "delta_exchange/ws_client.hpp"
@@ -49,10 +50,20 @@ public:
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
 
+        // ORDER MATTERS: spawn the InfluxWriter push thread BEFORE pinning +
+        // elevating this thread to SCHED_FIFO. The push thread otherwise
+        // inherits SCHED_FIFO + the isolated-core affinity and gets starved at
+        // birth (can't even execute its own re-pin code in registry.hpp). By
+        // spawning while we're still SCHED_OTHER + all-cores, the push thread
+        // inherits the safe defaults and registry.hpp pins it to housekeeping.
         influx_writer_ = std::make_unique<latency::InfluxWriter>(influx_cfg_);
 
         latency::Registry::init(venue_);
         latency::Registry::start_periodic_push(influx_writer_.get(), latency::PUSH_INTERVAL_SECONDS);
+
+        // Now safe to pin + elevate. This thread becomes the WS reactor.
+        core::cpu::pin_thread(cfg::cpu::FEED_REACTOR_CORE, "feed/ws_reactor");
+        core::cpu::set_realtime(cfg::cpu::RT_PRIORITY,     "feed/ws_reactor");
 
         feedRing_ = std::make_unique<SpscRing<FeedMessage, FEED_RING_SIZE>>();
 
@@ -60,7 +71,14 @@ public:
                                              cfg_.path.c_str(), products_,
                                              feedRing_.get(), product_group_);
         market_   = std::make_unique<MarketState>(feedRing_.get(), shared_state_, products_, product_group_, venue_);
-        market_thread_ = std::thread(&MarketState::run, market_.get(), std::ref(running_));
+
+        // Wrap MarketState::run in a lambda so the new thread pins itself
+        // before entering the busy-spin loop — avoids one transient migration.
+        market_thread_ = std::thread([this]() {
+            core::cpu::pin_thread(cfg::cpu::FEED_MARKET_CORE, "feed/market_state");
+            core::cpu::set_realtime(cfg::cpu::RT_PRIORITY,    "feed/market_state");
+            market_->run(running_);
+        });
 
         // Blocks in the epoll reactor until the signal handler calls shutdown() (eventfd wake).
         client_->start();

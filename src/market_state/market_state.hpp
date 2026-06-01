@@ -201,7 +201,8 @@ private:
     Histogram*                                                  spot_shm_hist_ = nullptr;
     Histogram*                                                  trade_shm_hist_ = nullptr;
     Histogram*                                                  ohlc_shm_hist_ = nullptr;
-
+    Histogram*                                                  queue_time_hist_ = nullptr;
+    
     using ResolutionRings =     std::array<OHLCRing<256>, ohlc_resolutions.size()>;
     using InstrumentCandles =   std::array<ResolutionRings, MAX_INSTRUMENTS>;
     using OHLCStore =           std::array<InstrumentCandles, 2>;

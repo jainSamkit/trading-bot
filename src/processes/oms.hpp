@@ -62,16 +62,25 @@ OmsProcess(const ProductTable& products, const ProductGroup& product_group, late
         sigaction(SIGINT, &sa, nullptr);
         sigaction(SIGTERM, &sa, nullptr);
 
-
+        // ORDER MATTERS: spawn the InfluxWriter push thread BEFORE pinning +
+        // elevating this thread to SCHED_FIFO. See feed.hpp for the full
+        // rationale — short version: ExecutionManager::run never blocks, so a
+        // push thread that inherits this thread's eventual SCHED_FIFO + core
+        // affinity is starved at birth.
         influx_writer_ = std::make_unique<latency::InfluxWriter>(influx_cfg_);
 
         latency::Registry::init(venue_);
         latency::Registry::start_periodic_push(influx_writer_.get(), latency::PUSH_INTERVAL_SECONDS);
 
+        // Now safe to pin + elevate. This thread runs ExecutionManager::run
+        // busy-spin until shutdown.
+        core::cpu::pin_thread(cfg::cpu::OMS_EXEC_CORE, "oms/execution_manager");
+        core::cpu::set_realtime(cfg::cpu::RT_PRIORITY, "oms/execution_manager");
+
         running_.store(true, std::memory_order_relaxed);
 
-        oms_manager_thread_   = std::thread(&OrderStateManager::run, oms_manager_.get(), std::ref(running_));
-        oms_ws_client_thread_ = std::thread(&WSClient::start, ws_client_.get());
+        // oms_manager_thread_   = std::thread(&OrderStateManager::run, oms_manager_.get(), std::ref(running_));
+        // oms_ws_client_thread_ = std::thread(&WSClient::start, ws_client_.get());
 
         // Runs on this thread until the signal handler flips running_ to false.
         execution_manager_->run(running_);

@@ -7,6 +7,7 @@
 #include "delta_exchange/models/product.hpp"
 #include "core/snapshots.hpp"
 #include "config/config.hpp"
+#include "latency/clock.hpp"
 
 // ── OrderBook ────────────────────────────────────────────────────────────────
 
